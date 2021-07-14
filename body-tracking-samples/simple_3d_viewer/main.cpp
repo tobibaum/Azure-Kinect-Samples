@@ -198,10 +198,13 @@ void PlayFromDevice() {
 	}
 
     // Initialize the 3d window controller
-    Window3dWrapper window3d;
-    window3d.Create("3D Visualization", sensorCalibrations[0]);
-    window3d.SetCloseCallback(CloseCallback);
-    window3d.SetKeyCallback(ProcessKey);
+	Window3dWrapper window3d;
+	bool no_viz = true;
+	if(!no_viz){
+		window3d.Create("3D Visualization", sensorCalibrations[0]);
+		window3d.SetCloseCallback(CloseCallback);
+		window3d.SetKeyCallback(ProcessKey);
+	}
 
 	uint32_t fps = 0, fps_counter = 0;
 	auto start_time = std::chrono::high_resolution_clock::now();
@@ -213,26 +216,28 @@ void PlayFromDevice() {
 
 	std::vector<int> status(device_count);
 
-	k4abt_frame_t bodyFrame = nullptr;
-	bool no_viz = true;
+	std::vector<k4abt_frame_t> bodyFrames(device_count);
+
+	std::vector<k4a_capture_t> sensorCaptures(device_count);
+
 
     while (s_isRunning)
     {
 		for(int dev_ind = 0; dev_ind < device_count; dev_ind++){
-			k4a_capture_t sensorCapture = nullptr;
-			k4a_wait_result_t getCaptureResult = k4a_device_get_capture(devices[dev_ind], &sensorCapture, 0); // timeout_in_ms is set to 0
+			//k4a_capture_t sensorCapture = nullptr;
+			k4a_wait_result_t getCaptureResult = k4a_device_get_capture(devices[dev_ind], &sensorCaptures[dev_ind], 0); // timeout_in_ms is set to 0
 			if (getCaptureResult == K4A_WAIT_RESULT_SUCCEEDED)
 			{
 				counters[dev_ind]["cap"]++;
 				// timeout_in_ms is set to 0. Return immediately no matter whether the sensorCapture is successfully added
 				// to the queue or not.
-				k4a_wait_result_t queueCaptureResult = k4abt_tracker_enqueue_capture(trackers[dev_ind], sensorCapture, 0);
+				k4a_wait_result_t queueCaptureResult = k4abt_tracker_enqueue_capture(trackers[dev_ind], sensorCaptures[dev_ind], 0);
 				if(queueCaptureResult == K4A_WAIT_RESULT_SUCCEEDED){
 					counters[dev_ind]["enq"]++;
 				}
 
 				// Release the sensor capture once it is no longer needed.
-				k4a_capture_release(sensorCapture);
+				k4a_capture_release(sensorCaptures[dev_ind]);
 
 				auto now = std::chrono::high_resolution_clock::now();
 				t_last_enqueue[dev_ind] = std::chrono::duration_cast<std::chrono::milliseconds>(now - absolute_start_time).count();
@@ -257,13 +262,11 @@ void PlayFromDevice() {
 			if (popFrameResult == K4A_WAIT_RESULT_SUCCEEDED)
 			{
 				counters[dev_ind]["pop"]++;
-				if(dev_ind == 0){
-					bodyFrame = std::move(bf);
+				if (bodyFrames[dev_ind] != nullptr){
+					k4abt_frame_release(bodyFrames[dev_ind]);
 				}
-				else
-				{
-					k4abt_frame_release(bf);
-				}
+				bodyFrames[dev_ind] = std::move(bf);
+
 				auto now = std::chrono::high_resolution_clock::now();
 				long time_taken = std::chrono::duration_cast<std::chrono::milliseconds>(now - absolute_start_time).count() - t_last_enqueue[dev_ind];
 				t_tracking[dev_ind].push_back(time_taken);
@@ -272,18 +275,23 @@ void PlayFromDevice() {
 			}
 		}
 
+		if(device_count>1 && bodyFrames[1] != nullptr){
+			k4abt_frame_release(bodyFrames[1]);
+			bodyFrames[1] = nullptr;
+		}
+
 		//if(bodyFrame != nullptr && status[0] == 1 && status[1] == 1)
-		if(bodyFrame != nullptr)
+		if(bodyFrames[0] != nullptr)
 		{
             /************* Successfully get a body tracking result, process the result here ***************/
-			if(!no_viz) VisualizeResult(bodyFrame, window3d, depthWidth, depthHeight);
+			if(!no_viz) VisualizeResult(bodyFrames[0], window3d, depthWidth, depthHeight);
 
 			now = std::chrono::high_resolution_clock::now();
             float durr = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
             if (durr > 1000) {
                 start_time = now;
                 fps = fps_counter;
-                std::cout << "FPS: " << fps << std::endl;
+                std::cout << "--FPS: " << fps << "--" << std::endl;
                 fps_counter = 0;
 
 				for(int di=0;di<device_count;di++){
@@ -297,8 +305,8 @@ void PlayFromDevice() {
             fps_counter++;
 
             //Release the bodyFrame
-            k4abt_frame_release(bodyFrame);
-			bodyFrame = nullptr;
+            k4abt_frame_release(bodyFrames[0]);
+			bodyFrames[0] = nullptr;
 			if(!no_viz){
 				window3d.SetLayout3d(s_layoutMode);
 				window3d.SetJointFrameVisualization(s_visualizeJointFrame);
