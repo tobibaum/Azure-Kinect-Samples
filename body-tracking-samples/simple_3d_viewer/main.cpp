@@ -13,6 +13,8 @@
 #include <Utilities.h>
 #include <Window3dWrapper.h>
 
+#include <numeric>
+
 void PrintUsage()
 {
     printf("\nUSAGE: (k4abt_)simple_3d_viewer.exe SensorMode[NFOV_UNBINNED, WFOV_BINNED](optional) RuntimeMode[CPU](optional)\n");
@@ -203,41 +205,70 @@ void PlayFromDevice() {
 
 	uint32_t fps = 0, fps_counter = 0;
 	auto start_time = std::chrono::high_resolution_clock::now();
-    //auto start_time_state = std::chrono::high_resolution_clock::now();
-    //auto absolute_start_time = std::chrono::high_resolution_clock::now();
+	auto absolute_start_time = std::chrono::high_resolution_clock::now();
     auto now = std::chrono::high_resolution_clock::now();
+	std::vector<long> t_last_enqueue(device_count);
+	std::vector<std::vector<long>> t_tracking(device_count);
+
+	std::vector<int> status(device_count);
+
+	k4abt_frame_t bodyFrame = nullptr;
 
     while (s_isRunning)
     {
-        k4a_capture_t sensorCapture = nullptr;
-        k4a_wait_result_t getCaptureResult = k4a_device_get_capture(devices[0], &sensorCapture, 0); // timeout_in_ms is set to 0
+		for(int dev_ind = 0; dev_ind < device_count; dev_ind++){
+			k4a_capture_t sensorCapture = nullptr;
+			k4a_wait_result_t getCaptureResult = k4a_device_get_capture(devices[dev_ind], &sensorCapture, 0); // timeout_in_ms is set to 0
+			if (getCaptureResult == K4A_WAIT_RESULT_SUCCEEDED)
+			{
+				// timeout_in_ms is set to 0. Return immediately no matter whether the sensorCapture is successfully added
+				// to the queue or not.
+				k4a_wait_result_t queueCaptureResult = k4abt_tracker_enqueue_capture(trackers[dev_ind], sensorCapture, 0);
 
-        if (getCaptureResult == K4A_WAIT_RESULT_SUCCEEDED)
-        {
-            // timeout_in_ms is set to 0. Return immediately no matter whether the sensorCapture is successfully added
-            // to the queue or not.
-            k4a_wait_result_t queueCaptureResult = k4abt_tracker_enqueue_capture(trackers[0], sensorCapture, 0);
+				// Release the sensor capture once it is no longer needed.
+				k4a_capture_release(sensorCapture);
 
-            // Release the sensor capture once it is no longer needed.
-            k4a_capture_release(sensorCapture);
+				auto now = std::chrono::high_resolution_clock::now();
+				t_last_enqueue[dev_ind] = std::chrono::duration_cast<std::chrono::milliseconds>(now - absolute_start_time).count();
 
-            if (queueCaptureResult == K4A_WAIT_RESULT_FAILED)
-            {
-                std::cout << "Error! Add capture to tracker process queue failed!" << std::endl;
-                break;
-            }
-        }
-        else if (getCaptureResult != K4A_WAIT_RESULT_TIMEOUT)
-        {
-            std::cout << "Get depth capture returned error: " << getCaptureResult << std::endl;
-            break;
-        }
+				status[dev_ind] = 1;
 
-        // Pop Result from Body Tracker
-        k4abt_frame_t bodyFrame = nullptr;
-        k4a_wait_result_t popFrameResult = k4abt_tracker_pop_result(trackers[0], &bodyFrame, 0); // timeout_in_ms is set to 0
-        if (popFrameResult == K4A_WAIT_RESULT_SUCCEEDED)
-        {
+				if (queueCaptureResult == K4A_WAIT_RESULT_FAILED)
+				{
+					std::cout << "Error! Add capture to tracker process queue failed!" << std::endl;
+					break;
+				}
+			}
+			else if (getCaptureResult != K4A_WAIT_RESULT_TIMEOUT)
+			{
+				std::cout << "Get depth capture returned error: " << getCaptureResult << std::endl;
+				break;
+			}
+
+			// Pop Result from Body Tracker
+			k4abt_frame_t bf = nullptr;
+			k4a_wait_result_t popFrameResult = k4abt_tracker_pop_result(trackers[dev_ind], &bf, 0); // timeout_in_ms is set to 0
+			if (popFrameResult == K4A_WAIT_RESULT_SUCCEEDED)
+			{
+				//std::cout << "deq" << dev_ind << std::endl;
+				if(dev_ind == 0){
+					bodyFrame = std::move(bf);
+				}
+				else
+				{
+					k4abt_frame_release(bf);
+				}
+				auto now = std::chrono::high_resolution_clock::now();
+				long time_taken = std::chrono::duration_cast<std::chrono::milliseconds>(now - absolute_start_time).count() - t_last_enqueue[dev_ind];
+				t_tracking[dev_ind].push_back(time_taken);
+
+				status[dev_ind] = 0;
+			}
+		}
+
+		if(bodyFrame != nullptr && status[0] == 1 && status[1] == 1)
+		//if(bodyFrame != nullptr)
+		{
             /************* Successfully get a body tracking result, process the result here ***************/
             VisualizeResult(bodyFrame, window3d, depthWidth, depthHeight);
 			now = std::chrono::high_resolution_clock::now();
@@ -252,21 +283,29 @@ void PlayFromDevice() {
 
             //Release the bodyFrame
             k4abt_frame_release(bodyFrame);
-        }
+			bodyFrame = nullptr;
        
-        window3d.SetLayout3d(s_layoutMode);
-        window3d.SetJointFrameVisualization(s_visualizeJointFrame);
-        window3d.Render();
+			window3d.SetLayout3d(s_layoutMode);
+			window3d.SetJointFrameVisualization(s_visualizeJointFrame);
+			window3d.Render();
+		}
     }
 
     std::cout << "Finished body tracking processing!" << std::endl;
 
-    window3d.Delete();
-    k4abt_tracker_shutdown(trackers[0]);
-    k4abt_tracker_destroy(trackers[0]);
+	for (int di = 0;di < device_count;di++) {
+        float average = std::accumulate(t_tracking[di].begin(), t_tracking[di].end(), 0.0) / t_tracking[di].size();
+        std::cout << di << ": time waiting for dequeue " << average << std::endl;
+    }
 
-    k4a_device_stop_cameras(devices[0]);
-    k4a_device_close(devices[0]);
+    window3d.Delete();
+	for(int dev_ind=0; dev_ind <device_count;dev_ind++){
+		k4abt_tracker_shutdown(trackers[dev_ind]);
+		k4abt_tracker_destroy(trackers[dev_ind]);
+
+		k4a_device_stop_cameras(devices[dev_ind]);
+		k4a_device_close(devices[dev_ind]);
+	}
 
 
 }
