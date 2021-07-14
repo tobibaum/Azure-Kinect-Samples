@@ -79,53 +79,6 @@ int64_t CloseCallback(void* /*context*/)
     return 1;
 }
 
-struct InputSettings
-{
-    k4a_depth_mode_t DepthCameraMode = K4A_DEPTH_MODE_NFOV_UNBINNED;
-    bool CpuOnlyMode = false;
-    bool Offline = false;
-    std::string FileName;
-};
-
-bool ParseInputSettingsFromArg(int argc, char** argv, InputSettings& inputSettings)
-{
-    for (int i = 1; i < argc; i++)
-    {
-        std::string inputArg(argv[i]);
-        if (inputArg == std::string("NFOV_UNBINNED"))
-        {
-            inputSettings.DepthCameraMode = K4A_DEPTH_MODE_NFOV_UNBINNED;
-        }
-        else if (inputArg == std::string("WFOV_BINNED"))
-        {
-            inputSettings.DepthCameraMode = K4A_DEPTH_MODE_WFOV_2X2BINNED;
-        }
-        else if (inputArg == std::string("CPU"))
-        {
-            inputSettings.CpuOnlyMode = true;
-        }
-        else if (inputArg == std::string("OFFLINE"))
-        {
-            inputSettings.Offline = true;
-            if (i < argc - 1) {
-                // Take the next argument after OFFLINE as file name
-                inputSettings.FileName = argv[i + 1];
-                i++;
-            }
-            else {
-                return false;
-            }
-        }
-        else
-        {
-            printf("Error command not understood: %s\n", inputArg.c_str());
-            return false;
-        }
-    }
-    return true;
-
-}
-
 void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int depthWidth, int depthHeight) {
 
     // Obtain original capture that generates the body tracking result
@@ -205,148 +158,65 @@ void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int dep
 
 }
 
-void PlayFile(InputSettings inputSettings) {
+void PlayFromDevice() {
+	uint32_t device_count = k4a_device_get_installed_count();
+    printf("Found %d connected devices:\n", device_count);
+
+	std::vector<k4a_device_t> devices(device_count);
+	std::vector<k4abt_tracker_t> trackers(device_count);
+	int depthWidth, depthHeight;
+	std::vector<k4a_calibration_t> sensorCalibrations(device_count);
+
+	for(uint8_t dev_ind = 0; dev_ind < device_count; dev_ind++){
+		k4a_device_t dev = nullptr;
+		VERIFY(k4a_device_open(dev_ind, &dev), "Open K4A Device failed!");
+
+		// Start camera. Make sure depth camera is enabled.
+		k4a_device_configuration_t deviceConfig = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
+		deviceConfig.depth_mode = K4A_DEPTH_MODE_NFOV_UNBINNED;
+		deviceConfig.color_resolution = K4A_COLOR_RESOLUTION_OFF;
+
+		k4a_calibration_t sensorCalib;
+		VERIFY(k4a_device_start_cameras(dev, &deviceConfig), "Start K4A cameras failed!");
+		VERIFY(k4a_device_get_calibration(dev, deviceConfig.depth_mode, deviceConfig.color_resolution, &sensorCalib),
+			"Get depth camera calibration failed!");
+
+		depthWidth = sensorCalib.depth_camera_calibration.resolution_width;
+		depthHeight = sensorCalib.depth_camera_calibration.resolution_height;
+
+		// Create Body Tracker
+		k4abt_tracker_t track = nullptr;
+		k4abt_tracker_configuration_t tracker_config = K4ABT_TRACKER_CONFIG_DEFAULT;
+		tracker_config.processing_mode = K4ABT_TRACKER_PROCESSING_MODE_GPU;
+		VERIFY(k4abt_tracker_create(&sensorCalib, tracker_config, &track), "Body tracker initialization failed!");
+
+		devices[dev_ind] = std::move(dev);
+		trackers[dev_ind] = std::move(track);
+		sensorCalibrations[dev_ind] = std::move(sensorCalib);
+	}
+
     // Initialize the 3d window controller
     Window3dWrapper window3d;
-
-    //create the tracker and playback handle
-    k4a_calibration_t sensor_calibration;
-    k4abt_tracker_t tracker = NULL;
-    k4a_playback_t playback_handle = NULL;
-
-    const char* file = inputSettings.FileName.c_str();
-    if (k4a_playback_open(file, &playback_handle) != K4A_RESULT_SUCCEEDED)
-    {
-        printf("Failed to open recording: %s\n", file);
-        return;
-    }
-
-
-    if (k4a_playback_get_calibration(playback_handle, &sensor_calibration) != K4A_RESULT_SUCCEEDED)
-    {
-        printf("Failed to get calibration\n");
-        return;
-    }
-    
-
-    k4a_capture_t capture = NULL;
-    k4a_stream_result_t result = K4A_STREAM_RESULT_SUCCEEDED;
-
-    k4abt_tracker_configuration_t tracker_config = { K4ABT_SENSOR_ORIENTATION_DEFAULT };
-
-    tracker_config.processing_mode = inputSettings.CpuOnlyMode ? K4ABT_TRACKER_PROCESSING_MODE_CPU : K4ABT_TRACKER_PROCESSING_MODE_GPU;
-
-    VERIFY(k4abt_tracker_create(&sensor_calibration, tracker_config, &tracker), "Body tracker initialization failed!");
-
-    k4abt_tracker_set_temporal_smoothing(tracker, 1);
-
-    int depthWidth = sensor_calibration.depth_camera_calibration.resolution_width;
-    int depthHeight = sensor_calibration.depth_camera_calibration.resolution_height;
-
-    window3d.Create("3D Visualization", sensor_calibration);
+    window3d.Create("3D Visualization", sensorCalibrations[0]);
     window3d.SetCloseCallback(CloseCallback);
     window3d.SetKeyCallback(ProcessKey);
 
-    while (result == K4A_STREAM_RESULT_SUCCEEDED)
-    {
-        result = k4a_playback_get_next_capture(playback_handle, &capture);
-        // check to make sure we have a depth image
-        // if we are not at the end of the file
-        if (result != K4A_STREAM_RESULT_EOF) {
-            k4a_image_t depth_image = k4a_capture_get_depth_image(capture);
-            if (depth_image == NULL) {
-                //If no depth image, print a warning and skip to next frame
-                printf("Warning: No depth image, skipping frame\n");
-                k4a_capture_release(capture);
-                continue;
-            }
-            // Release the Depth image
-            k4a_image_release(depth_image);
-        }
-        if (result == K4A_STREAM_RESULT_SUCCEEDED)
-        {
-            
-            //enque capture and pop results - synchronous
-            k4a_wait_result_t queue_capture_result = k4abt_tracker_enqueue_capture(tracker, capture, K4A_WAIT_INFINITE);
-
-            // Release the sensor capture once it is no longer needed.
-            k4a_capture_release(capture);
-
-            k4abt_frame_t bodyFrame = NULL;
-            k4a_wait_result_t pop_frame_result = k4abt_tracker_pop_result(tracker, &bodyFrame, K4A_WAIT_INFINITE);
-            if (pop_frame_result == K4A_WAIT_RESULT_SUCCEEDED)
-            {
-                size_t num_bodies = k4abt_frame_get_num_bodies(bodyFrame);
-                printf("%zu bodies are detected\n", num_bodies);
-                /************* Successfully get a body tracking result, process the result here ***************/
-                VisualizeResult(bodyFrame, window3d, depthWidth, depthHeight); 
-                //Release the bodyFrame
-                k4abt_frame_release(bodyFrame);
-            }
-            else
-            {
-                printf("Pop body frame result failed!\n");
-                break;
-            }
-           
-        }
-
-        window3d.SetLayout3d(s_layoutMode);
-        window3d.SetJointFrameVisualization(s_visualizeJointFrame);
-        window3d.Render();
-
-        if (result == K4A_STREAM_RESULT_EOF)
-        {
-            // End of file reached
-            break;
-        }
-    }
-    k4abt_tracker_shutdown(tracker);
-    k4abt_tracker_destroy(tracker);
-    window3d.Delete();
-    printf("Finished body tracking processing!\n");
-    k4a_playback_close(playback_handle);
-
-}
-
-void PlayFromDevice(InputSettings inputSettings) {
-    k4a_device_t device = nullptr;
-    VERIFY(k4a_device_open(0, &device), "Open K4A Device failed!");
-
-    // Start camera. Make sure depth camera is enabled.
-    k4a_device_configuration_t deviceConfig = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
-    deviceConfig.depth_mode = inputSettings.DepthCameraMode;
-    deviceConfig.color_resolution = K4A_COLOR_RESOLUTION_OFF;
-    VERIFY(k4a_device_start_cameras(device, &deviceConfig), "Start K4A cameras failed!");
-
-    // Get calibration information
-    k4a_calibration_t sensorCalibration;
-    VERIFY(k4a_device_get_calibration(device, deviceConfig.depth_mode, deviceConfig.color_resolution, &sensorCalibration),
-        "Get depth camera calibration failed!");
-    int depthWidth = sensorCalibration.depth_camera_calibration.resolution_width;
-    int depthHeight = sensorCalibration.depth_camera_calibration.resolution_height;
-
-    // Create Body Tracker
-    k4abt_tracker_t tracker = nullptr;
-    k4abt_tracker_configuration_t tracker_config = K4ABT_TRACKER_CONFIG_DEFAULT;
-    tracker_config.processing_mode = inputSettings.CpuOnlyMode ? K4ABT_TRACKER_PROCESSING_MODE_CPU : K4ABT_TRACKER_PROCESSING_MODE_GPU;
-    VERIFY(k4abt_tracker_create(&sensorCalibration, tracker_config, &tracker), "Body tracker initialization failed!");
-    // Initialize the 3d window controller
-    Window3dWrapper window3d;
-    window3d.Create("3D Visualization", sensorCalibration);
-    window3d.SetCloseCallback(CloseCallback);
-    window3d.SetKeyCallback(ProcessKey);
+	uint32_t fps = 0, fps_counter = 0;
+	auto start_time = std::chrono::high_resolution_clock::now();
+    //auto start_time_state = std::chrono::high_resolution_clock::now();
+    //auto absolute_start_time = std::chrono::high_resolution_clock::now();
+    auto now = std::chrono::high_resolution_clock::now();
 
     while (s_isRunning)
     {
         k4a_capture_t sensorCapture = nullptr;
-        k4a_wait_result_t getCaptureResult = k4a_device_get_capture(device, &sensorCapture, 0); // timeout_in_ms is set to 0
+        k4a_wait_result_t getCaptureResult = k4a_device_get_capture(devices[0], &sensorCapture, 0); // timeout_in_ms is set to 0
 
         if (getCaptureResult == K4A_WAIT_RESULT_SUCCEEDED)
         {
             // timeout_in_ms is set to 0. Return immediately no matter whether the sensorCapture is successfully added
             // to the queue or not.
-            k4a_wait_result_t queueCaptureResult = k4abt_tracker_enqueue_capture(tracker, sensorCapture, 0);
+            k4a_wait_result_t queueCaptureResult = k4abt_tracker_enqueue_capture(trackers[0], sensorCapture, 0);
 
             // Release the sensor capture once it is no longer needed.
             k4a_capture_release(sensorCapture);
@@ -365,11 +235,21 @@ void PlayFromDevice(InputSettings inputSettings) {
 
         // Pop Result from Body Tracker
         k4abt_frame_t bodyFrame = nullptr;
-        k4a_wait_result_t popFrameResult = k4abt_tracker_pop_result(tracker, &bodyFrame, 0); // timeout_in_ms is set to 0
+        k4a_wait_result_t popFrameResult = k4abt_tracker_pop_result(trackers[0], &bodyFrame, 0); // timeout_in_ms is set to 0
         if (popFrameResult == K4A_WAIT_RESULT_SUCCEEDED)
         {
             /************* Successfully get a body tracking result, process the result here ***************/
             VisualizeResult(bodyFrame, window3d, depthWidth, depthHeight);
+			now = std::chrono::high_resolution_clock::now();
+            float durr = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
+            if (durr > 1000) {
+                start_time = now;
+                fps = fps_counter;
+                std::cout << "FPS: " << fps << std::endl;
+                fps_counter = 0;
+            }
+            fps_counter++;
+
             //Release the bodyFrame
             k4abt_frame_release(bodyFrame);
         }
@@ -382,33 +262,17 @@ void PlayFromDevice(InputSettings inputSettings) {
     std::cout << "Finished body tracking processing!" << std::endl;
 
     window3d.Delete();
-    k4abt_tracker_shutdown(tracker);
-    k4abt_tracker_destroy(tracker);
+    k4abt_tracker_shutdown(trackers[0]);
+    k4abt_tracker_destroy(trackers[0]);
 
-    k4a_device_stop_cameras(device);
-    k4a_device_close(device);
+    k4a_device_stop_cameras(devices[0]);
+    k4a_device_close(devices[0]);
 
 
 }
 
 int main(int argc, char** argv)
 {
-    InputSettings inputSettings;
-   
-    if (ParseInputSettingsFromArg(argc, argv, inputSettings)) {
-        // Either play the offline file or play from the device
-        if (inputSettings.Offline == true) {     
-            PlayFile(inputSettings);
-        }
-        else {
-            PlayFromDevice(inputSettings);
-        }
-    }
-    else {
-        // Print app usage if user entered incorrect arguments.
-        PrintUsage();
-        return -1;
-    }
-
+	PlayFromDevice();
     return 0;
 }
