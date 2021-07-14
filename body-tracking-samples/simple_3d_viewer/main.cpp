@@ -209,10 +209,12 @@ void PlayFromDevice() {
     auto now = std::chrono::high_resolution_clock::now();
 	std::vector<long> t_last_enqueue(device_count);
 	std::vector<std::vector<long>> t_tracking(device_count);
+	std::vector<std::map<std::string, int>> counters(device_count);
 
 	std::vector<int> status(device_count);
 
 	k4abt_frame_t bodyFrame = nullptr;
+	bool no_viz = true;
 
     while (s_isRunning)
     {
@@ -221,9 +223,13 @@ void PlayFromDevice() {
 			k4a_wait_result_t getCaptureResult = k4a_device_get_capture(devices[dev_ind], &sensorCapture, 0); // timeout_in_ms is set to 0
 			if (getCaptureResult == K4A_WAIT_RESULT_SUCCEEDED)
 			{
+				counters[dev_ind]["cap"]++;
 				// timeout_in_ms is set to 0. Return immediately no matter whether the sensorCapture is successfully added
 				// to the queue or not.
 				k4a_wait_result_t queueCaptureResult = k4abt_tracker_enqueue_capture(trackers[dev_ind], sensorCapture, 0);
+				if(queueCaptureResult == K4A_WAIT_RESULT_SUCCEEDED){
+					counters[dev_ind]["enq"]++;
+				}
 
 				// Release the sensor capture once it is no longer needed.
 				k4a_capture_release(sensorCapture);
@@ -250,7 +256,7 @@ void PlayFromDevice() {
 			k4a_wait_result_t popFrameResult = k4abt_tracker_pop_result(trackers[dev_ind], &bf, 0); // timeout_in_ms is set to 0
 			if (popFrameResult == K4A_WAIT_RESULT_SUCCEEDED)
 			{
-				//std::cout << "deq" << dev_ind << std::endl;
+				counters[dev_ind]["pop"]++;
 				if(dev_ind == 0){
 					bodyFrame = std::move(bf);
 				}
@@ -266,11 +272,12 @@ void PlayFromDevice() {
 			}
 		}
 
-		if(bodyFrame != nullptr && status[0] == 1 && status[1] == 1)
-		//if(bodyFrame != nullptr)
+		//if(bodyFrame != nullptr && status[0] == 1 && status[1] == 1)
+		if(bodyFrame != nullptr)
 		{
             /************* Successfully get a body tracking result, process the result here ***************/
-            VisualizeResult(bodyFrame, window3d, depthWidth, depthHeight);
+			if(!no_viz) VisualizeResult(bodyFrame, window3d, depthWidth, depthHeight);
+
 			now = std::chrono::high_resolution_clock::now();
             float durr = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
             if (durr > 1000) {
@@ -278,16 +285,25 @@ void PlayFromDevice() {
                 fps = fps_counter;
                 std::cout << "FPS: " << fps << std::endl;
                 fps_counter = 0;
+
+				for(int di=0;di<device_count;di++){
+					std::cout << "==" << di << "==" << std::endl;
+					for(auto m : counters[di]){
+						std::cout << m.first << " " << m.second << std::endl;
+						counters[di][m.first]=0;
+					}
+				}
             }
             fps_counter++;
 
             //Release the bodyFrame
             k4abt_frame_release(bodyFrame);
 			bodyFrame = nullptr;
-       
-			window3d.SetLayout3d(s_layoutMode);
-			window3d.SetJointFrameVisualization(s_visualizeJointFrame);
-			window3d.Render();
+			if(!no_viz){
+				window3d.SetLayout3d(s_layoutMode);
+				window3d.SetJointFrameVisualization(s_visualizeJointFrame);
+				window3d.Render();
+			}
 		}
     }
 
