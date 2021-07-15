@@ -14,6 +14,9 @@
 #include <Window3dWrapper.h>
 
 #include <numeric>
+#include <thread>
+#include <queue>
+#include <signal.h>
 
 void PrintUsage()
 {
@@ -160,168 +163,169 @@ void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int dep
 
 }
 
-void PlayFromDevice(int arg) {
-	uint32_t device_count = k4a_device_get_installed_count();
-    printf("Found %d connected devices:\n", device_count);
+std::vector<std::queue<k4abt_frame_t>> bodyFrameQueues;
 
-	if(arg!=-1){
-		device_count = 1;
-	}
+class BodyReader{
+private:
+	std::vector<k4a_device_t> devices;
+	std::vector<k4abt_tracker_t> trackers;
+	uint8_t device_count;
 
-	std::vector<k4a_device_t> devices(device_count);
-	std::vector<k4abt_tracker_t> trackers(device_count);
+public:
+	
+	std::vector<k4a_calibration_t> sensorCalibrations;
 	int depthWidth, depthHeight;
-	std::vector<k4a_calibration_t> sensorCalibrations(device_count);
 
-	for(uint8_t dev_ind = 0; dev_ind < device_count; dev_ind++){
-		k4a_device_t dev = nullptr;
-		int device_id = dev_ind;
+	BodyReader(int arg){
+		device_count = k4a_device_get_installed_count();
+		printf("Found %d connected devices:\n", device_count);
 
 		if(arg!=-1){
-			device_id = arg;
+			device_count = 1;
 		}
-		VERIFY(k4a_device_open(device_id, &dev), "Open K4A Device failed!");
 
-		// Start camera. Make sure depth camera is enabled.
-		k4a_device_configuration_t deviceConfig = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
-		deviceConfig.depth_mode = K4A_DEPTH_MODE_NFOV_UNBINNED;
-		deviceConfig.color_resolution = K4A_COLOR_RESOLUTION_OFF;
+		devices.reserve(device_count);
+		trackers.reserve(device_count);
+		int depthWidth, depthHeight;
+		sensorCalibrations.reserve(device_count);
 
-		k4a_calibration_t sensorCalib;
-		VERIFY(k4a_device_start_cameras(dev, &deviceConfig), "Start K4A cameras failed!");
-		VERIFY(k4a_device_get_calibration(dev, deviceConfig.depth_mode, deviceConfig.color_resolution, &sensorCalib),
-			"Get depth camera calibration failed!");
+		for(uint8_t dev_ind = 0; dev_ind < device_count; dev_ind++){
+			k4a_device_t dev = nullptr;
+			int device_id = dev_ind;
 
-		depthWidth = sensorCalib.depth_camera_calibration.resolution_width;
-		depthHeight = sensorCalib.depth_camera_calibration.resolution_height;
+			if(arg!=-1){
+				device_id = arg;
+			}
+			VERIFY(k4a_device_open(device_id, &dev), "Open K4A Device failed!");
 
-		// Create Body Tracker
-		k4abt_tracker_t track = nullptr;
-		k4abt_tracker_configuration_t tracker_config = K4ABT_TRACKER_CONFIG_DEFAULT;
-		tracker_config.processing_mode = K4ABT_TRACKER_PROCESSING_MODE_GPU;
-		tracker_config.model_path =  "/usr/bin/dnn_model_2_0_lite_op11.onnx";
-		VERIFY(k4abt_tracker_create(&sensorCalib, tracker_config, &track), "Body tracker initialization failed!");
+			// Start camera. Make sure depth camera is enabled.
+			k4a_device_configuration_t deviceConfig = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
+			deviceConfig.depth_mode = K4A_DEPTH_MODE_NFOV_UNBINNED;
+			deviceConfig.color_resolution = K4A_COLOR_RESOLUTION_OFF;
 
-		devices[dev_ind] = std::move(dev);
-		trackers[dev_ind] = std::move(track);
-		sensorCalibrations[dev_ind] = std::move(sensorCalib);
+			k4a_calibration_t sensorCalib;
+			VERIFY(k4a_device_start_cameras(dev, &deviceConfig), "Start K4A cameras failed!");
+			VERIFY(k4a_device_get_calibration(dev, deviceConfig.depth_mode, deviceConfig.color_resolution, &sensorCalib),
+				"Get depth camera calibration failed!");
+
+			depthWidth = sensorCalib.depth_camera_calibration.resolution_width;
+			depthHeight = sensorCalib.depth_camera_calibration.resolution_height;
+
+			// Create Body Tracker
+			k4abt_tracker_t track = nullptr;
+			k4abt_tracker_configuration_t tracker_config = K4ABT_TRACKER_CONFIG_DEFAULT;
+			tracker_config.processing_mode = K4ABT_TRACKER_PROCESSING_MODE_GPU;
+			tracker_config.model_path =  "/usr/bin/dnn_model_2_0_lite_op11.onnx";
+			VERIFY(k4abt_tracker_create(&sensorCalib, tracker_config, &track), "Body tracker initialization failed!");
+
+			devices[dev_ind] = std::move(dev);
+			trackers[dev_ind] = std::move(track);
+			sensorCalibrations[dev_ind] = std::move(sensorCalib);
+
+			std::queue<k4abt_frame_t> empty;
+			bodyFrameQueues.push_back(empty);
+		}
+
 	}
 
-    // Initialize the 3d window controller
-	Window3dWrapper window3d;
-	bool no_viz = false;
-	if(!no_viz){
-		window3d.Create("3D Visualization", sensorCalibrations[0]);
-		window3d.SetCloseCallback(CloseCallback);
-		window3d.SetKeyCallback(ProcessKey);
-	}
+	void run(void){
+		auto start_time = std::chrono::high_resolution_clock::now();
+		auto now = std::chrono::high_resolution_clock::now();
+		std::vector<std::map<std::string, int>> counters(device_count);
 
-	uint32_t fps = 0, fps_counter = 0;
-	auto start_time = std::chrono::high_resolution_clock::now();
-    auto now = std::chrono::high_resolution_clock::now();
-	std::vector<std::map<std::string, int>> counters(device_count);
+		std::vector<k4abt_frame_t> bodyFrames(device_count);
+		std::vector<k4a_capture_t> sensorCaptures(device_count);
 
-	std::vector<k4abt_frame_t> bodyFrames(device_count);
-
-	std::vector<k4a_capture_t> sensorCaptures(device_count);
-
-
-    while (s_isRunning)
-    {
-		for(int dev_ind = 0; dev_ind < device_count; dev_ind++){
-			//k4a_capture_t sensorCapture = nullptr;
-			k4a_wait_result_t getCaptureResult = k4a_device_get_capture(devices[dev_ind], &sensorCaptures[dev_ind], 0); // timeout_in_ms is set to 0
-			if (getCaptureResult == K4A_WAIT_RESULT_SUCCEEDED)
-			{
-				counters[dev_ind]["cap"]++;
-				// timeout_in_ms is set to 0. Return immediately no matter whether the sensorCapture is successfully added
-				// to the queue or not.
-				k4a_wait_result_t queueCaptureResult = k4abt_tracker_enqueue_capture(trackers[dev_ind], sensorCaptures[dev_ind], 0);
-				if(queueCaptureResult == K4A_WAIT_RESULT_SUCCEEDED){
-					counters[dev_ind]["enq"]++;
-				}
-
-				// Release the sensor capture once it is no longer needed.
-				k4a_capture_release(sensorCaptures[dev_ind]);
-
-				if (queueCaptureResult == K4A_WAIT_RESULT_FAILED)
+		while (s_isRunning)
+		{
+			for(int dev_ind = 0; dev_ind < device_count; dev_ind++){
+				//k4a_capture_t sensorCapture = nullptr;
+				k4a_wait_result_t getCaptureResult = k4a_device_get_capture(devices[dev_ind], &sensorCaptures[dev_ind], 0); // timeout_in_ms is set to 0
+				if (getCaptureResult == K4A_WAIT_RESULT_SUCCEEDED)
 				{
-					std::cout << "Error! Add capture to tracker process queue failed!" << std::endl;
+					counters[dev_ind]["cap"]++;
+					// timeout_in_ms is set to 0. Return immediately no matter whether the sensorCapture is successfully added
+					// to the queue or not.
+					k4a_wait_result_t queueCaptureResult = k4abt_tracker_enqueue_capture(trackers[dev_ind], sensorCaptures[dev_ind], 0);
+					if(queueCaptureResult == K4A_WAIT_RESULT_SUCCEEDED){
+						counters[dev_ind]["enq"]++;
+					}
+
+					// Release the sensor capture once it is no longer needed.
+					k4a_capture_release(sensorCaptures[dev_ind]);
+
+					if (queueCaptureResult == K4A_WAIT_RESULT_FAILED)
+					{
+						std::cout << "Error! Add capture to tracker process queue failed!" << std::endl;
+						break;
+					}
+				}
+				else if (getCaptureResult != K4A_WAIT_RESULT_TIMEOUT)
+				{
+					std::cout << "Get depth capture returned error: " << getCaptureResult << std::endl;
 					break;
 				}
-			}
-			else if (getCaptureResult != K4A_WAIT_RESULT_TIMEOUT)
-			{
-				std::cout << "Get depth capture returned error: " << getCaptureResult << std::endl;
-				break;
-			}
 
-			// Pop Result from Body Tracker
-			k4abt_frame_t bf = nullptr;
-			k4a_wait_result_t popFrameResult = k4abt_tracker_pop_result(trackers[dev_ind], &bf, 0); // timeout_in_ms is set to 0
-			if (popFrameResult == K4A_WAIT_RESULT_SUCCEEDED)
-			{
-				counters[dev_ind]["pop"]++;
-				if (bodyFrames[dev_ind] != nullptr){
-					k4abt_frame_release(bodyFrames[dev_ind]);
+				// Pop Result from Body Tracker
+				k4abt_frame_t bf = nullptr;
+				k4a_wait_result_t popFrameResult = k4abt_tracker_pop_result(trackers[dev_ind], &bf, 0); // timeout_in_ms is set to 0
+				if (popFrameResult == K4A_WAIT_RESULT_SUCCEEDED)
+				{
+					counters[dev_ind]["pop"]++;
+					if (bodyFrames[dev_ind] != nullptr){
+						k4abt_frame_release(bodyFrames[dev_ind]);
+					}
+					bodyFrameQueues[dev_ind].push(std::move(bf));
+					//k4abt_frame_release(bf);
 				}
-				bodyFrames[dev_ind] = std::move(bf);
-
 			}
-		}
 
-		if(device_count>1 && bodyFrames[1] != nullptr){
-			k4abt_frame_release(bodyFrames[1]);
-			bodyFrames[1] = nullptr;
-		}
-
-		if(bodyFrames[0] != nullptr)
-		{
-            /************* Successfully get a body tracking result, process the result here ***************/
-			if(!no_viz) VisualizeResult(bodyFrames[0], window3d, depthWidth, depthHeight);
-
+			// print timing
 			now = std::chrono::high_resolution_clock::now();
-            float durr = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
-            if (durr > 1000) {
-                start_time = now;
-                fps = fps_counter;
-                std::cout << "--FPS: " << fps << "--" << std::endl;
-                fps_counter = 0;
-
+			float durr = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
+			if (durr > 1000) {
+				start_time = now;
 				for(int di=0;di<device_count;di++){
 					std::cout << "==" << di << "==" << std::endl;
 					for(auto m : counters[di]){
 						std::cout << m.first << " " << m.second << std::endl;
 						counters[di][m.first]=0;
 					}
+					std::cout << "Q:" << bodyFrameQueues[di].size() << std::endl;
 				}
-            }
-            fps_counter++;
-
-            //Release the bodyFrame
-            k4abt_frame_release(bodyFrames[0]);
-			bodyFrames[0] = nullptr;
-
-			if(!no_viz){
-				window3d.SetLayout3d(s_layoutMode);
-				window3d.SetJointFrameVisualization(s_visualizeJointFrame);
-				window3d.Render();
 			}
+
+			/*if(bodyFrames[0] != nullptr)
+			{
+				k4abt_frame_release(bodyFrames[0]);
+				bodyFrames[0] = nullptr;
+
+			}
+
+			if(device_count>1 && bodyFrames[1] != nullptr){
+				k4abt_frame_release(bodyFrames[1]);
+				bodyFrames[1] = nullptr;
+			}*/
+
 		}
-    }
 
-    std::cout << "Finished body tracking processing!" << std::endl;
+		std::cout << "Finished body tracking processing!" << std::endl;
 
-    window3d.Delete();
-	for(int dev_ind=0; dev_ind <device_count;dev_ind++){
-		k4abt_tracker_shutdown(trackers[dev_ind]);
-		k4abt_tracker_destroy(trackers[dev_ind]);
+		for(int dev_ind=0; dev_ind <device_count;dev_ind++){
+			k4abt_tracker_shutdown(trackers[dev_ind]);
+			k4abt_tracker_destroy(trackers[dev_ind]);
 
-		k4a_device_stop_cameras(devices[dev_ind]);
-		k4a_device_close(devices[dev_ind]);
+			k4a_device_stop_cameras(devices[dev_ind]);
+			k4a_device_close(devices[dev_ind]);
+		}
+
+
 	}
+};
 
-
+void callback_handler(int arg){
+	std::cout << "yep" << std::endl;
+	s_isRunning = false;
 }
 
 int main(int argc, char** argv)
@@ -331,6 +335,44 @@ int main(int argc, char** argv)
 		dev_id = atoi(argv[1]);
 	}
 
-	PlayFromDevice(dev_id);
+	BodyReader br(dev_id);
+
+	std::thread body_frame_thread(&BodyReader::run, &br);
+
+    // Initialize the 3d window controller
+	Window3dWrapper window3d;
+	window3d.Create("3D Visualization", br.sensorCalibrations[0]);
+	window3d.SetCloseCallback(CloseCallback);
+	window3d.SetKeyCallback(ProcessKey);
+
+	signal(SIGINT, callback_handler);
+	while(s_isRunning){
+		std::this_thread::sleep_for(std::chrono::milliseconds(30));
+		for(int i=0; i < bodyFrameQueues.size();i++){
+
+			int count = 0;
+
+			while(!bodyFrameQueues[i].empty()){
+				//std::cout << "plot it?" << std::endl;
+				k4abt_frame_t bf = std::move(bodyFrameQueues[i].front());
+				
+				// do something with the bodyFrame!
+				if(i==0){
+					//std::cout << "got some" << std::endl;
+					VisualizeResult(bf, window3d, br.depthWidth, br.depthHeight);
+					window3d.SetLayout3d(s_layoutMode);
+					window3d.SetJointFrameVisualization(s_visualizeJointFrame);
+					window3d.Render();
+				}
+
+				k4abt_frame_release(bf);
+				bodyFrameQueues[i].pop();
+				count++;
+			}
+			std::cout << i << " has " << count << std::endl;
+		}
+	}
+
+    window3d.Delete();
     return 0;
 }
