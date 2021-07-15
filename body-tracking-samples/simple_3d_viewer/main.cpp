@@ -160,9 +160,13 @@ void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int dep
 
 }
 
-void PlayFromDevice() {
+void PlayFromDevice(int arg) {
 	uint32_t device_count = k4a_device_get_installed_count();
     printf("Found %d connected devices:\n", device_count);
+
+	if(arg!=-1){
+		device_count = 1;
+	}
 
 	std::vector<k4a_device_t> devices(device_count);
 	std::vector<k4abt_tracker_t> trackers(device_count);
@@ -171,7 +175,12 @@ void PlayFromDevice() {
 
 	for(uint8_t dev_ind = 0; dev_ind < device_count; dev_ind++){
 		k4a_device_t dev = nullptr;
-		VERIFY(k4a_device_open(dev_ind, &dev), "Open K4A Device failed!");
+		int device_id = dev_ind;
+
+		if(arg!=-1){
+			device_id = arg;
+		}
+		VERIFY(k4a_device_open(device_id, &dev), "Open K4A Device failed!");
 
 		// Start camera. Make sure depth camera is enabled.
 		k4a_device_configuration_t deviceConfig = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
@@ -190,6 +199,7 @@ void PlayFromDevice() {
 		k4abt_tracker_t track = nullptr;
 		k4abt_tracker_configuration_t tracker_config = K4ABT_TRACKER_CONFIG_DEFAULT;
 		tracker_config.processing_mode = K4ABT_TRACKER_PROCESSING_MODE_GPU;
+		tracker_config.model_path =  "/usr/bin/dnn_model_2_0_lite_op11.onnx";
 		VERIFY(k4abt_tracker_create(&sensorCalib, tracker_config, &track), "Body tracker initialization failed!");
 
 		devices[dev_ind] = std::move(dev);
@@ -199,7 +209,7 @@ void PlayFromDevice() {
 
     // Initialize the 3d window controller
 	Window3dWrapper window3d;
-	bool no_viz = true;
+	bool no_viz = false;
 	if(!no_viz){
 		window3d.Create("3D Visualization", sensorCalibrations[0]);
 		window3d.SetCloseCallback(CloseCallback);
@@ -208,13 +218,8 @@ void PlayFromDevice() {
 
 	uint32_t fps = 0, fps_counter = 0;
 	auto start_time = std::chrono::high_resolution_clock::now();
-	auto absolute_start_time = std::chrono::high_resolution_clock::now();
     auto now = std::chrono::high_resolution_clock::now();
-	std::vector<long> t_last_enqueue(device_count);
-	std::vector<std::vector<long>> t_tracking(device_count);
 	std::vector<std::map<std::string, int>> counters(device_count);
-
-	std::vector<int> status(device_count);
 
 	std::vector<k4abt_frame_t> bodyFrames(device_count);
 
@@ -239,11 +244,6 @@ void PlayFromDevice() {
 				// Release the sensor capture once it is no longer needed.
 				k4a_capture_release(sensorCaptures[dev_ind]);
 
-				auto now = std::chrono::high_resolution_clock::now();
-				t_last_enqueue[dev_ind] = std::chrono::duration_cast<std::chrono::milliseconds>(now - absolute_start_time).count();
-
-				status[dev_ind] = 1;
-
 				if (queueCaptureResult == K4A_WAIT_RESULT_FAILED)
 				{
 					std::cout << "Error! Add capture to tracker process queue failed!" << std::endl;
@@ -267,11 +267,6 @@ void PlayFromDevice() {
 				}
 				bodyFrames[dev_ind] = std::move(bf);
 
-				auto now = std::chrono::high_resolution_clock::now();
-				long time_taken = std::chrono::duration_cast<std::chrono::milliseconds>(now - absolute_start_time).count() - t_last_enqueue[dev_ind];
-				t_tracking[dev_ind].push_back(time_taken);
-
-				status[dev_ind] = 0;
 			}
 		}
 
@@ -280,7 +275,6 @@ void PlayFromDevice() {
 			bodyFrames[1] = nullptr;
 		}
 
-		//if(bodyFrame != nullptr && status[0] == 1 && status[1] == 1)
 		if(bodyFrames[0] != nullptr)
 		{
             /************* Successfully get a body tracking result, process the result here ***************/
@@ -307,6 +301,7 @@ void PlayFromDevice() {
             //Release the bodyFrame
             k4abt_frame_release(bodyFrames[0]);
 			bodyFrames[0] = nullptr;
+
 			if(!no_viz){
 				window3d.SetLayout3d(s_layoutMode);
 				window3d.SetJointFrameVisualization(s_visualizeJointFrame);
@@ -316,11 +311,6 @@ void PlayFromDevice() {
     }
 
     std::cout << "Finished body tracking processing!" << std::endl;
-
-	for (int di = 0;di < device_count;di++) {
-        float average = std::accumulate(t_tracking[di].begin(), t_tracking[di].end(), 0.0) / t_tracking[di].size();
-        std::cout << di << ": time waiting for dequeue " << average << std::endl;
-    }
 
     window3d.Delete();
 	for(int dev_ind=0; dev_ind <device_count;dev_ind++){
@@ -336,6 +326,11 @@ void PlayFromDevice() {
 
 int main(int argc, char** argv)
 {
-	PlayFromDevice();
+	int dev_id = -1;
+	if(argc == 2){
+		dev_id = atoi(argv[1]);
+	}
+
+	PlayFromDevice(dev_id);
     return 0;
 }
