@@ -49,39 +49,38 @@ int64_t CloseCallback(void* /*context*/)
     return 1;
 }
 
-void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int depthWidth, int depthHeight) {
+void VisualizeResult(k4abt::frame bodyFrame, Window3dWrapper& window3d, int depthWidth, int depthHeight) {
 
     // Obtain original capture that generates the body tracking result
-    k4a_capture_t originalCapture = k4abt_frame_get_capture(bodyFrame);
-    k4a_image_t depthImage = k4a_capture_get_depth_image(originalCapture);
+    k4a::capture originalCapture = bodyFrame.get_capture();
+    k4a::image depthImage = originalCapture.get_depth_image();
 
     std::vector<Color> pointCloudColors(depthWidth * depthHeight, { 1.f, 1.f, 1.f, 1.f });
 
     // Read body index map and assign colors
-    k4a_image_t bodyIndexMap = k4abt_frame_get_body_index_map(bodyFrame);
-    const uint8_t* bodyIndexMapBuffer = k4a_image_get_buffer(bodyIndexMap);
+    k4a::image bodyIndexMap = bodyFrame.get_body_index_map();
+    const uint8_t* bodyIndexMapBuffer = bodyIndexMap.get_buffer();
     for (int i = 0; i < depthWidth * depthHeight; i++)
     {
         uint8_t bodyIndex = bodyIndexMapBuffer[i];
         if (bodyIndex != K4ABT_BODY_INDEX_MAP_BACKGROUND)
         {
-            uint32_t bodyId = k4abt_frame_get_body_id(bodyFrame, bodyIndex);
+            uint32_t bodyId = bodyFrame.get_body_id(bodyIndex);
             pointCloudColors[i] = g_bodyColors[bodyId % g_bodyColors.size()];
         }
     }
-    k4a_image_release(bodyIndexMap);
 
     // Visualize point cloud
-    window3d.UpdatePointClouds(depthImage, pointCloudColors);
+    window3d.UpdatePointClouds(depthImage.handle(), pointCloudColors);
 
     // Visualize the skeleton data
     window3d.CleanJointsAndBones();
-    uint32_t numBodies = k4abt_frame_get_num_bodies(bodyFrame);
+    uint32_t numBodies = bodyFrame.get_num_bodies();
     for (uint32_t i = 0; i < numBodies; i++)
     {
         k4abt_body_t body;
-        VERIFY(k4abt_frame_get_body_skeleton(bodyFrame, i, &body.skeleton), "Get skeleton from body frame failed!");
-        body.id = k4abt_frame_get_body_id(bodyFrame, i);
+        bodyFrame.get_body_skeleton(i, body.skeleton);
+        body.id = bodyFrame.get_body_id(i);
 
         // Assign the correct color based on the body id
         Color color = g_bodyColors[body.id % g_bodyColors.size()];
@@ -122,10 +121,6 @@ void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int dep
             }
         }
     }
-
-    k4a_capture_release(originalCapture);
-    k4a_image_release(depthImage);
-
 }
 
 std::vector<std::queue<k4abt::frame>> bodyFrameQueues;
@@ -174,6 +169,7 @@ void bodyReaderInit(int arg){
         // Create Body Tracker
         k4abt_tracker_configuration_t tracker_config = K4ABT_TRACKER_CONFIG_DEFAULT;
         tracker_config.processing_mode = K4ABT_TRACKER_PROCESSING_MODE_GPU;
+        //tracker_config.model_path =  "/usr/bin/dnn_model_2_0_lite_op11.onnx";
         trackers[dev_ind] = k4abt::tracker::create(sensorCalib, tracker_config);
 
         devices[dev_ind] = std::move(dev);
@@ -192,18 +188,19 @@ void run(void){
 
     std::vector<k4abt::frame> bodyFrames(device_count);
 
-    auto no_delay = std::chrono::milliseconds(0);
+    auto t_delay = std::chrono::milliseconds(0);
+    //auto t_delay = std::chrono::milliseconds(K4A_WAIT_INFINITE);
 
     while (s_isRunning)
     {
         for(int dev_ind = 0; dev_ind < device_count; dev_ind++){
             k4a::capture sensor_capture;
-            bool getCaptureResult = devices[dev_ind].get_capture(&sensor_capture, no_delay);
+            bool getCaptureResult = devices[dev_ind].get_capture(&sensor_capture, t_delay);
             if (getCaptureResult)
             {
                 counters[dev_ind]["cap"]++;
 
-                bool queueCaptureResult = trackers[dev_ind].enqueue_capture(sensor_capture, no_delay);
+                bool queueCaptureResult = trackers[dev_ind].enqueue_capture(sensor_capture, t_delay);
                 if(queueCaptureResult){
                     counters[dev_ind]["enq"]++;
                 }
@@ -211,7 +208,7 @@ void run(void){
 
             // Pop Result from Body Tracker
             k4abt::frame bf;
-            bool popFrameResult = trackers[dev_ind].pop_result(&bf, no_delay);
+            bool popFrameResult = trackers[dev_ind].pop_result(&bf, t_delay);
             if (popFrameResult)
             {
                 counters[dev_ind]["pop"]++;
@@ -276,7 +273,7 @@ int main(int argc, char** argv)
                 // do something with the bodyFrame!
                 if(i==0){
                     //std::cout << "got some" << std::endl;
-                    //VisualizeResult(bf, window3d, depthWidth, depthHeight);
+                    VisualizeResult(bf, window3d, depthWidth, depthHeight);
                     window3d.SetLayout3d(s_layoutMode);
                     window3d.SetJointFrameVisualization(s_visualizeJointFrame);
                     window3d.Render();
