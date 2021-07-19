@@ -168,7 +168,8 @@ void bodyReaderInit(int arg){
 
         // Create Body Tracker
         k4abt_tracker_configuration_t tracker_config = K4ABT_TRACKER_CONFIG_DEFAULT;
-        tracker_config.processing_mode = K4ABT_TRACKER_PROCESSING_MODE_GPU;
+        //tracker_config.processing_mode = K4ABT_TRACKER_PROCESSING_MODE_GPU;
+        tracker_config.processing_mode = K4ABT_TRACKER_PROCESSING_MODE_GPU_TENSORRT;
         //tracker_config.model_path =  "/usr/bin/dnn_model_2_0_lite_op11.onnx";
         trackers[dev_ind] = k4abt::tracker::create(sensorCalib, tracker_config);
 
