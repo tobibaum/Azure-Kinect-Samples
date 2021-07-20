@@ -139,7 +139,7 @@ private:
             deviceConfig.color_format = K4A_IMAGE_FORMAT_COLOR_NV12;
             deviceConfig.color_resolution = K4A_COLOR_RESOLUTION_720P;
             deviceConfig.synchronized_images_only = true;
-            deviceConfig.depth_delay_off_color_usec = 100;
+            deviceConfig.depth_delay_off_color_usec = 10;
             if (b_master) {
                 deviceConfig.wired_sync_mode = K4A_WIRED_SYNC_MODE_MASTER;
             }
@@ -160,7 +160,7 @@ private:
 public:
     int depthWidth, depthHeight;
     std::vector<k4a_calibration_t> sensorCalibrations;
-    std::vector<std::queue<k4abt::frame>> bodyFrameQueues;
+    std::vector<std::queue<std::pair<long, k4abt::frame>>> bodyFrameQueues;
     uint8_t device_count;
 
     SkeletonCapture(int arg){
@@ -220,7 +220,7 @@ public:
 #endif //DEBUG
             trackers.insert(trackers.begin(), k4abt::tracker::create(sensorCalib, tracker_config));
 
-            std::queue<k4abt::frame> empty;
+            std::queue<std::pair<long, k4abt::frame>> empty;
             bodyFrameQueues.push_back(empty);
         }
     }
@@ -255,7 +255,13 @@ public:
                 if (popFrameResult)
                 {
                     counters[dev_ind]["pop"]++;
-                    bodyFrameQueues[dev_ind].push(bf);
+
+                    k4a::capture originalCapture = bf.get_capture();
+                    k4a::image colImage = originalCapture.get_color_image();
+                    long ts = colImage.get_device_timestamp().count() / 1000;
+
+                    // insert this bodyframe together with its exact capture time
+                    bodyFrameQueues[dev_ind].push({ts, bf});
                 }
             }
 
@@ -305,15 +311,33 @@ int main(int argc, char** argv)
     int frame_count = 0;
 
     signal(SIGINT, callback_handler);
+
+
+    std::vector<k4abt::frame> most_recent_frames(sc.device_count);
+    std::vector<long> most_recent_times(sc.device_count);
+
     while(s_isRunning){
-        for(int i=0; i < sc.device_count; i++){
-            while(!sc.bodyFrameQueues[i].empty()){
+        bool plot_it = false;
+        for(int dev_ind=0; dev_ind < sc.device_count; dev_ind++){
+            while(!sc.bodyFrameQueues[dev_ind].empty()){
                 // found a new frame for this camera
-                k4abt::frame bf = sc.bodyFrameQueues[i].front();
+                k4abt::frame bf = sc.bodyFrameQueues[dev_ind].front().second;
+                most_recent_frames[dev_ind] = bf;
+                most_recent_times[dev_ind] = sc.bodyFrameQueues[dev_ind].front().first;
                 
+                // =======================
                 // do something with the bodyFrame!
-                if(i==0){
-                    VisualizeResult(bf, window3d, sc.depthWidth, sc.depthHeight);
+                // =======================
+                if(sc.device_count == 2){
+                    long time_diff = std::abs(most_recent_times[1] - most_recent_times[0]);
+                    if(time_diff < 5){
+                        plot_it = true;
+                    }
+                }
+
+                if(plot_it){
+                    // frames are guaranteed synchronized here!!! :D
+                    VisualizeResult(most_recent_frames[0], window3d, sc.depthWidth, sc.depthHeight);
                     window3d.Render();
 
                     // Count frames for plotting
@@ -325,9 +349,10 @@ int main(int argc, char** argv)
                         frame_count = 0;
                     }
                     frame_count++;
+                    plot_it = false;
                 }
 
-                sc.bodyFrameQueues[i].pop();
+                sc.bodyFrameQueues[dev_ind].pop();
             }
         }
     }
