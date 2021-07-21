@@ -220,6 +220,34 @@ k4abt_body_t combine_bodies(k4abt_body_t bod0, k4abt_body_t bod1){
     return combined_bod0;
 }
 
+std::vector<Eigen::MatrixXf> example;
+Eigen::Matrix4f umey_trans_tpose;
+uint32_t state = 0;
+
+k4abt_body_t fit_example(Eigen::MatrixXf bod_mat, uint32_t it_frame){
+    // ========================
+    // ==== FIT the T-POSE ====
+    // ========================
+    k4abt_body_t loaded_body, loaded_body_raw;
+    if (state == FIND_START_POSE) {
+        loaded_body_raw = eigen_to_k4a_body(example.at(0));
+        umey_trans_tpose = Eigen::umeyama(example.at(0).transpose(), bod_mat.transpose(), true);
+        Eigen::MatrixXf fitted_mat = k4a_body_to_eigen(transfer_bods(loaded_body_raw, umey_trans_tpose));
+        float diff = (fitted_mat - bod_mat).cwiseAbs().sum();
+        if (diff < 4000) {
+            state = COPYING_POSE;
+        }
+    }
+    else {
+        loaded_body_raw = eigen_to_k4a_body(example.at(it_frame % example.size()));
+    }
+    loaded_body = transfer_bods(loaded_body_raw, umey_trans_tpose);
+    loaded_body.id = LOAD_BOD_ID;
+
+    return loaded_body;
+}
+
+
 int main(int argc, char** argv)
 {
 #ifdef DEBUG
@@ -249,13 +277,13 @@ int main(int argc, char** argv)
     auto start_time = std::chrono::high_resolution_clock::now();
     auto start_time_state = std::chrono::high_resolution_clock::now();
     auto now = std::chrono::high_resolution_clock::now();
-    int frame_count = 0;
+    uint32_t frame_count = 0;
+    uint32_t it_frame = 0;
+
 
     signal(SIGINT, callback_handler);
 
-    std::vector<Eigen::MatrixXf> example;
 
-    int state = 0;
     std::vector<k4abt::frame> most_recent_frames(sc.device_count);
     std::vector<long> most_recent_times(sc.device_count);
 
@@ -308,20 +336,10 @@ int main(int argc, char** argv)
 
                     std::vector<k4abt_body_t> bodies, bodies1;
 
-                    int bods_seen = 0;
-                    if (frame0.get_num_bodies() == 1)
-                    {
-                        //bodies.push_back(frame0.get_body(0));
-                        bods_seen++;
-                    }
-
-                    if (frame1.get_num_bodies() == 1) {
-                        //bodies1.push_back(frame1.get_body(0));
-                        bods_seen++;
-                    }
-
-                    // check that we see someone in each pic
-                    if (bods_seen == 2) {
+                    // combine the two synched frames!
+                    if (frame0.get_num_bodies() >= 1 && frame1.get_num_bodies() >= 1) {
+                        // assume that the first body in get bodies is the biggest
+                        // one?
                         k4abt_body_t bod0 = frame0.get_body(0);
                         k4abt_body_t bod1 = frame1.get_body(0);
 
@@ -334,19 +352,22 @@ int main(int argc, char** argv)
                         {
                             k4abt_body_t bod0_trans = transfer_bods(bod0, mat_trans);
                             k4abt_body_t bod1_trans = transfer_bods(bod1, mat_trans_back);
-                            bod0_trans.id = 5;
-                            bod1_trans.id = 5;
 
                             k4abt_body_t combined_bod = combine_bodies(bod0, bod1_trans);
+                            Eigen::MatrixXf combined_bod_mat = k4a_body_to_eigen(combined_bod);
 
-                            //bodies.push_back(bod1_trans);
-                            //bodies1.push_back(bod0_trans);
 
                             bodies.push_back(combined_bod);
                             bodies1.push_back(transfer_bods(combined_bod, mat_trans));
+
+                            if(example.size() > 0){
+                                k4abt_body_t loaded = fit_example(combined_bod_mat, it_frame);
+                                bodies1.push_back(loaded);
+                            }
                         }
                     }
 
+                    // plot it all
                     draw_skeleton_on_img(bodies, color, sc.sensorCalibrations[0]);
                     cv::flip(color, color_flip, 1);
                     cv::imshow("color window", color_flip);
@@ -367,10 +388,15 @@ int main(int argc, char** argv)
                         frame_count = 0;
                     }
                     frame_count++;
+                    it_frame++;
                     plot_it = false;
                 }
+
                 // check and process some key inputs
                 const int32_t key = cv::waitKey(1); //1ms
+                if(key != -1){
+                    std::cout << "key press: " << (char)key << std::endl;
+                }
                 if (key == 'q') {
                     sc.s_isRunning = false;
                     break;
@@ -387,6 +413,39 @@ int main(int argc, char** argv)
                 }
                 else if (key == 'd') {
                     state = DEFAULT;
+                }
+
+                switch (state) {
+                    case RECORD_CLICKED:
+                    {
+                        now = std::chrono::high_resolution_clock::now();
+                        auto countdown = 3000 - std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_state).count();
+                        std::cout << "record in " << countdown << std::endl;
+                        if (countdown < 0) {
+                            // 3 seconds have past. record now!!
+                            skel_hist_mas.clear();
+                            state = RECORDING;
+                            start_time_state = now;
+                        }
+                        break;
+                    }
+                    case RECORDING:
+                    {
+                        now = std::chrono::high_resolution_clock::now();
+                        auto countdown = 10000 - std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_state).count();
+                        std::cout << "record for " << countdown << std::endl;
+                        if (countdown < 0) {
+                            // 10 seconds have past. record now!!
+                            store_skeleton_hist(skel_hist_mas, "master_record.txt");
+                            state = DEFAULT;
+                            start_time_state = now;
+                        }
+                        break;
+                    }
+                    default:
+                    {
+                        break;
+                    }
                 }
 
                 sc.bodyFrameQueues[dev_ind].pop();
