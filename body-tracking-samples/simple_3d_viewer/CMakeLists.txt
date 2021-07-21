@@ -1,6 +1,8 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
+set( CMAKE_CXX_STANDARD 17 )
+
 find_package(k4arecord REQUIRED)
 find_package(OpenCV REQUIRED)
 

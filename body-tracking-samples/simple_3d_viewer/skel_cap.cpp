@@ -146,6 +146,18 @@ void SkeletonCapture::run(void){
     std::cout << "Finished body tracking processing!" << std::endl;
 }
 
+k4abt_body_t transfer_bods(k4abt_body_t _bod_in, Eigen::Matrix4f _mat_trans) {
+	Eigen::MatrixXf kin1bod_mat = k4a_body_to_eigen(_bod_in);
+	Eigen::MatrixXf full_mat1((int)K4ABT_JOINT_COUNT, 4);
+	Eigen::MatrixXf oneMat = Eigen::MatrixXf::Ones((int)K4ABT_JOINT_COUNT, 1);
+
+	full_mat1 << kin1bod_mat, oneMat;
+	Eigen::MatrixXf res_mat1 = (_mat_trans * full_mat1.transpose()).transpose().block(0, 0, K4ABT_JOINT_COUNT, 3);
+	k4abt_body_t res_bod = eigen_to_k4a_body(res_mat1);
+	res_bod.id = _bod_in.id;
+	return res_bod;
+}
+
 Eigen::MatrixXf k4a_body_to_eigen(k4abt_body_t _main_body) {
 	int i = 0;
 	Eigen::MatrixXf _body_mat((int)K4ABT_JOINT_COUNT, 3);
