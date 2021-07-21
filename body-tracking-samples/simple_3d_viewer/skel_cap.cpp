@@ -151,10 +151,12 @@ k4abt_body_t transfer_bods(k4abt_body_t _bod_in, Eigen::Matrix4f _mat_trans) {
 	Eigen::MatrixXf full_mat1((int)K4ABT_JOINT_COUNT, 4);
 	Eigen::MatrixXf oneMat = Eigen::MatrixXf::Ones((int)K4ABT_JOINT_COUNT, 1);
 
+
 	full_mat1 << kin1bod_mat, oneMat;
-	Eigen::MatrixXf res_mat1 = (_mat_trans * full_mat1.transpose()).transpose().block(0, 0, K4ABT_JOINT_COUNT, 3);
+	Eigen::MatrixXf res_mat1 = (_mat_trans * full_mat1.transpose()).transpose().block(0, 0, (int)K4ABT_JOINT_COUNT, 3);
 	k4abt_body_t res_bod = eigen_to_k4a_body(res_mat1);
 	res_bod.id = _bod_in.id;
+
 	return res_bod;
 }
 
@@ -249,6 +251,20 @@ std::vector<std::pair<int, int>> draw_pairs =
 	{ K4ABT_JOINT_HEAD, K4ABT_JOINT_NOSE}
 };
 
+std::vector<cv::Vec3b> colors = {
+     cv::Vec3b( 255,   0,   0 ), 
+     cv::Vec3b(   0, 255,   0 ), 
+     cv::Vec3b(   0,   0, 255 ), 
+     cv::Vec3b( 255, 255,   0 ), 
+     cv::Vec3b(   0, 255, 255 ), 
+     cv::Vec3b( 255,   0, 255 ), 
+     cv::Vec3b( 128,   0,   0 ), 
+     cv::Vec3b(   0, 128,   0 ), 
+     cv::Vec3b(   0,   0, 128 ), 
+     cv::Vec3b( 128, 128,   0 ), 
+     cv::Vec3b(   0, 128, 128 ), 
+     cv::Vec3b( 128,   0, 128 ) };
+
 void draw_skeleton_on_img(std::vector<k4abt_body_t> bodies, cv::Mat color, k4a_calibration_t calibration)
 {
 	// Visualize Skeleton
@@ -261,10 +277,10 @@ void draw_skeleton_on_img(std::vector<k4abt_body_t> bodies, cv::Mat color, k4a_c
 			col2 = cv::Vec3b(0, 255, 0);
 		}
 		else {
-			col = cv::Vec3b(255, 255, 0);
+			col = colors[(body.id - 1) %colors.size()];
 			col2 = cv::Vec3b(0, 255, 255);
 		}
-		int thicc = ((body.id == COMBINED_BOD_ID) || (body.id == LOAD_BOD_ID)) ? 10 : 2;
+		int thicc = ((body.id == COMBINED_BOD_ID) || (body.id == LOAD_BOD_ID)) ? 10 : 4;
 
 		cv::Point last_point;
 		int k = 0;

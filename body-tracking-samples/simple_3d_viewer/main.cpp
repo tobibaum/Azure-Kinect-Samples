@@ -144,45 +144,43 @@ Eigen::Matrix4f mat_trans_back = Eigen::Matrix4f::Zero();
 std::vector<Eigen::MatrixXf> skel_hist_mas;
 
 void update_calibration(Eigen::MatrixXf body_mat0, Eigen::MatrixXf body_mat1){
-    if (!is_calibrated) {
-        // ====================
-        // ===== UMEYAMA ======
-        // ====================
-        Eigen::Matrix4f umey_trans;
-        umey_trans = Eigen::umeyama(body_mat0.transpose(), body_mat1.transpose(), false);
+    // ====================
+    // ===== UMEYAMA ======
+    // ====================
+    Eigen::Matrix4f umey_trans;
+    umey_trans = Eigen::umeyama(body_mat0.transpose(), body_mat1.transpose(), false);
 
-        trans_memory.push_back(umey_trans);
-        while (trans_memory.size() > 10) {
-            trans_memory.pop_front();
+    trans_memory.push_back(umey_trans);
+    while (trans_memory.size() > 10) {
+        trans_memory.pop_front();
+    }
+
+    // ====================
+    // rotation/translation/scale between cams
+    // ====================
+    if (trans_memory.size() == 10) {
+        // sum up
+        for (auto _k = trans_memory.begin(); _k != trans_memory.end(); _k++) {
+            mat_trans += *_k;
         }
+        // normalize to average
+        mat_trans /= mat_trans(3, 3);
 
-        // ====================
-        // rotation/translation/scale between cams
-        // ====================
-        if (trans_memory.size() == 10) {
-            // sum up
-            for (auto _k = trans_memory.begin(); _k != trans_memory.end(); _k++) {
-                mat_trans += *_k;
-            }
-            // normalize to average
-            mat_trans /= mat_trans(3, 3);
+        Eigen::MatrixXf mat_trans_temp(3, 4);
+        Eigen::Matrix3f transp = mat_trans.block(0, 0, 3, 3).transpose();
+        mat_trans_temp << transp, -transp * mat_trans.block(0, 3, 3, 1);
 
-            Eigen::MatrixXf mat_trans_temp(3, 4);
-            Eigen::Matrix3f transp = mat_trans.block(0, 0, 3, 3).transpose();
-            mat_trans_temp << transp, -transp * mat_trans.block(0, 3, 3, 1);
+        mat_trans_back << mat_trans_temp, 0, 0, 0, 1;
+        is_calibrated = true;
 
-            mat_trans_back << mat_trans_temp, 0, 0, 0, 1;
-            is_calibrated = true;
-
-            std::cout << "calibration done!" << std::endl;
-        }
+        //std::cout << "calibration done!" << std::endl;
     }
 }
 
 k4abt_body_t combine_bodies(k4abt_body_t bod0, k4abt_body_t bod1){
 // compute average position in master camera
     Eigen::MatrixXf mat0 = k4a_body_to_eigen(bod0);
-    Eigen::MatrixXf mat1 = k4a_body_to_eigen(bod1);
+    Eigen::MatrixXf mat1 = k4a_body_to_eigen(transfer_bods(bod1, mat_trans_back));
 
     Eigen::VectorXd conf0((int)K4ABT_JOINT_COUNT);
     Eigen::VectorXd conf1((int)K4ABT_JOINT_COUNT);
@@ -246,7 +244,7 @@ int main(int argc, char** argv)
         window3d.SetKeyCallback(ProcessKey);
         window3d.SetJointFrameVisualization(false);
     }
-    cv::Mat color, color_flip;
+    cv::Mat color, color1, color_flip, color1_flip;
 
     auto start_time = std::chrono::high_resolution_clock::now();
     auto start_time_state = std::chrono::high_resolution_clock::now();
@@ -289,34 +287,36 @@ int main(int argc, char** argv)
                 if(plot_it){
                     // from here on out we assume 2 cameras with synched tracked
                     // bodies for now
-                    bf = most_recent_frames[0];
+                    k4abt::frame frame0 = most_recent_frames[0];
+                    k4abt::frame frame1 = most_recent_frames[1];
+
                     if(render3d){
-                        VisualizeResult(bf, window3d, sc.depthWidth, sc.depthHeight);
+                        VisualizeResult(frame0, window3d, sc.depthWidth, sc.depthHeight);
                         window3d.Render();
                     }
 
                     //=====================
                     //========MAIN=========
                     //=====================
-                    k4a::capture cap = bf.get_capture();
+                    k4a::capture cap = frame0.get_capture();
                     k4a::image colImage = cap.get_color_image();
                     color = k4a::get_mat(colImage);
 
-                    k4abt::frame frame0 = most_recent_frames[0];
-                    k4abt::frame frame1 = most_recent_frames[1];
+                    k4a::capture cap1 = frame1.get_capture();
+                    k4a::image colImage1 = cap1.get_color_image();
+                    color1 = k4a::get_mat(colImage1);
 
-                    std::vector<k4abt_body_t> bodies;
+                    std::vector<k4abt_body_t> bodies, bodies1;
 
                     int bods_seen = 0;
                     if (frame0.get_num_bodies() == 1)
                     {
-                        bodies.push_back(frame0.get_body(0));
+                        //bodies.push_back(frame0.get_body(0));
                         bods_seen++;
                     }
+
                     if (frame1.get_num_bodies() == 1) {
-                        if(is_calibrated){
-                            bodies.push_back(transfer_bods(frame1.get_body(0), mat_trans));
-                        }
+                        //bodies1.push_back(frame1.get_body(0));
                         bods_seen++;
                     }
 
@@ -328,19 +328,32 @@ int main(int argc, char** argv)
                         Eigen::MatrixXf body_mat0 = k4a_body_to_eigen(bod0);
                         Eigen::MatrixXf body_mat1 = k4a_body_to_eigen(bod1);
 
-                        update_calibration(body_mat0, body_mat0);
+                        update_calibration(body_mat0, body_mat1);
 
                         if(is_calibrated)
                         {
-                            k4abt_body_t combined_bod = combine_bodies(bod0, bod1);
+                            k4abt_body_t bod0_trans = transfer_bods(bod0, mat_trans);
+                            k4abt_body_t bod1_trans = transfer_bods(bod1, mat_trans_back);
+                            bod0_trans.id = 5;
+                            bod1_trans.id = 5;
+
+                            k4abt_body_t combined_bod = combine_bodies(bod0, bod1_trans);
+
+                            //bodies.push_back(bod1_trans);
+                            //bodies1.push_back(bod0_trans);
 
                             bodies.push_back(combined_bod);
+                            bodies1.push_back(transfer_bods(combined_bod, mat_trans));
                         }
                     }
 
                     draw_skeleton_on_img(bodies, color, sc.sensorCalibrations[0]);
                     cv::flip(color, color_flip, 1);
                     cv::imshow("color window", color_flip);
+
+                    draw_skeleton_on_img(bodies1, color1, sc.sensorCalibrations[1]);
+                    cv::flip(color1, color1_flip, 1);
+                    cv::imshow("color window 1", color1_flip);
                     //=====================
                     //========MAIN=========
                     //=====================
@@ -382,7 +395,10 @@ int main(int argc, char** argv)
     }
     std::cout << "end run!" << std::endl;
     body_frame_thread.join();
-    window3d.Delete();
-    std::cout << "deleted window" << std::endl;
+
+    if(render3d){
+        window3d.Delete();
+        std::cout << "deleted window" << std::endl;
+    }
     return 0;
 }
