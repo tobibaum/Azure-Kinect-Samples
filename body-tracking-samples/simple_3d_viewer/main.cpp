@@ -208,7 +208,7 @@ k4abt_body_t combine_bodies(k4abt_body_t bod0, k4abt_body_t bod1){
             combined.block(j, 0, 1, 3) = mat1.block(j, 0, 1, 3);
         }
         else {
-            combined.block(j, 0, 1, 3) = (mat0.block(j, 0, 1, 3) + mat1.block(j, 0, 1, 3)) / 2;
+            combined.block(j, 0, 1, 3) = (mat0.block(j, 0, 1, 3));// + mat1.block(j, 0, 1, 3)) / 2;
         }
     }
 
@@ -282,6 +282,7 @@ int main(int argc, char** argv)
 
 
     signal(SIGINT, callback_handler);
+    std::string msg;
 
 
     std::vector<k4abt::frame> most_recent_frames(sc.device_count);
@@ -362,7 +363,7 @@ int main(int argc, char** argv)
 
                             if(example.size() > 0){
                                 k4abt_body_t loaded = fit_example(combined_bod_mat, it_frame);
-                                bodies1.push_back(loaded);
+                                bodies.push_back(loaded);
                             }
                         }
                     }
@@ -370,6 +371,9 @@ int main(int argc, char** argv)
                     // plot it all
                     draw_skeleton_on_img(bodies, color, sc.sensorCalibrations[0]);
                     cv::flip(color, color_flip, 1);
+                    cv::putText(color_flip, msg, {50,100},
+                            cv::FONT_HERSHEY_SIMPLEX, 3, {0,0,0}, 3,
+                            cv::LINE_AA);
                     cv::imshow("color window", color_flip);
 
                     draw_skeleton_on_img(bodies1, color1, sc.sensorCalibrations[1]);
@@ -421,11 +425,15 @@ int main(int argc, char** argv)
                         now = std::chrono::high_resolution_clock::now();
                         auto countdown = 3000 - std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_state).count();
                         std::cout << "record in " << countdown << std::endl;
+                        std::ostringstream ss;
+                        ss << "record in " << (float)countdown/1000.f;
+                        msg = ss.str();
                         if (countdown < 0) {
                             // 3 seconds have past. record now!!
                             skel_hist_mas.clear();
                             state = RECORDING;
                             start_time_state = now;
+                            msg = "";
                         }
                         break;
                     }
@@ -434,11 +442,15 @@ int main(int argc, char** argv)
                         now = std::chrono::high_resolution_clock::now();
                         auto countdown = 10000 - std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_state).count();
                         std::cout << "record for " << countdown << std::endl;
+                        std::ostringstream ss;
+                        ss << "record for " << (float)countdown/1000.f;
+                        msg = ss.str();
                         if (countdown < 0) {
                             // 10 seconds have past. record now!!
                             store_skeleton_hist(skel_hist_mas, "master_record.txt");
                             state = DEFAULT;
                             start_time_state = now;
+                            msg = "";
                         }
                         break;
                     }

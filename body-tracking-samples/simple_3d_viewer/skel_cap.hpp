@@ -17,7 +17,7 @@
 #include <Eigen/Geometry>
 #include <opencv2/opencv.hpp>
 
-#define DEBUG
+//#define DEBUG
 
 const uint8_t COMBINED_BOD_ID = 15;
 const uint8_t LOAD_BOD_ID = 16;
