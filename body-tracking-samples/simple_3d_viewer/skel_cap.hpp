@@ -22,11 +22,11 @@
 const uint8_t COMBINED_BOD_ID = 15;
 const uint8_t LOAD_BOD_ID = 16;
 
-std::vector<Eigen::MatrixXf> load_skeleton_hist(std::string _filename);
-void store_skeleton_hist(std::vector<Eigen::MatrixXf> _skel_hist, std::string _filename);
+std::vector<std::pair<long, Eigen::MatrixXf>> load_skeleton_hist(std::string _filename);
+void store_skeleton_hist(std::vector<std::pair<long, Eigen::MatrixXf>> _skel_hist, std::string _filename);
 
 Eigen::MatrixXf k4a_body_to_eigen(k4abt_body_t _main_body);
-k4abt_body_t eigen_to_k4a_body(Eigen::MatrixXf _in_mat);
+k4abt_body_t eigen_to_k4a_body(Eigen::MatrixXf _in_mat, int id=-1);
 k4abt_body_t transfer_bods(k4abt_body_t _bod_in, Eigen::Matrix4f _mat_trans);
 void draw_skeleton_on_img(std::vector<k4abt_body_t> bodies, cv::Mat color, k4a_calibration_t calibration);
 

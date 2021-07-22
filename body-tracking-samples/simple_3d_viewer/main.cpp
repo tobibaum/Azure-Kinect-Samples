@@ -27,6 +27,7 @@ typedef enum
     DEFAULT = 0,
     RECORD_CLICKED,
     RECORDING,
+    SAVE_RECORDING,
     FIND_START_POSE,
     COPYING_POSE
 } multi_kinect_state_t;
@@ -141,7 +142,7 @@ bool is_calibrated = false;
 std::list<Eigen::Matrix4f> trans_memory;
 Eigen::Matrix4f mat_trans = Eigen::Matrix4f::Zero();
 Eigen::Matrix4f mat_trans_back = Eigen::Matrix4f::Zero();
-std::vector<Eigen::MatrixXf> skel_hist_mas;
+std::vector<std::pair<long, Eigen::MatrixXf>> skel_hist_mas;
 
 void update_calibration(Eigen::MatrixXf body_mat0, Eigen::MatrixXf body_mat1){
     // ====================
@@ -177,7 +178,7 @@ void update_calibration(Eigen::MatrixXf body_mat0, Eigen::MatrixXf body_mat1){
     }
 }
 
-k4abt_body_t combine_bodies(k4abt_body_t bod0, k4abt_body_t bod1){
+Eigen::MatrixXf combine_bodies(k4abt_body_t bod0, k4abt_body_t bod1){
 // compute average position in master camera
     Eigen::MatrixXf mat0 = k4a_body_to_eigen(bod0);
     Eigen::MatrixXf mat1 = k4a_body_to_eigen(transfer_bods(bod1, mat_trans_back));
@@ -208,19 +209,14 @@ k4abt_body_t combine_bodies(k4abt_body_t bod0, k4abt_body_t bod1){
             combined.block(j, 0, 1, 3) = mat1.block(j, 0, 1, 3);
         }
         else {
-            combined.block(j, 0, 1, 3) = (mat0.block(j, 0, 1, 3));// + mat1.block(j, 0, 1, 3)) / 2;
+            combined.block(j, 0, 1, 3) = (mat0.block(j, 0, 1, 3) + mat1.block(j, 0, 1, 3)) / 2.f;
         }
     }
 
-    k4abt_body_t combined_bod0 = eigen_to_k4a_body(combined);
-    combined_bod0.id = COMBINED_BOD_ID;
-
-    skel_hist_mas.push_back(combined);
-
-    return combined_bod0;
+    return combined;
 }
 
-std::vector<Eigen::MatrixXf> example;
+std::vector<std::pair<long, Eigen::MatrixXf>> example;
 Eigen::Matrix4f umey_trans_tpose;
 uint32_t state = 0;
 
@@ -230,8 +226,8 @@ k4abt_body_t fit_example(Eigen::MatrixXf bod_mat, uint32_t it_frame){
     // ========================
     k4abt_body_t loaded_body, loaded_body_raw;
     if (state == FIND_START_POSE) {
-        loaded_body_raw = eigen_to_k4a_body(example.at(0));
-        umey_trans_tpose = Eigen::umeyama(example.at(0).transpose(), bod_mat.transpose(), true);
+        loaded_body_raw = eigen_to_k4a_body(example.at(0).second);
+        umey_trans_tpose = Eigen::umeyama(example.at(0).second.transpose(), bod_mat.transpose(), true);
         Eigen::MatrixXf fitted_mat = k4a_body_to_eigen(transfer_bods(loaded_body_raw, umey_trans_tpose));
         float diff = (fitted_mat - bod_mat).cwiseAbs().sum();
         if (diff < 4000) {
@@ -239,7 +235,8 @@ k4abt_body_t fit_example(Eigen::MatrixXf bod_mat, uint32_t it_frame){
         }
     }
     else {
-        loaded_body_raw = eigen_to_k4a_body(example.at(it_frame % example.size()));
+        // TODO! include timing here!
+        loaded_body_raw = eigen_to_k4a_body(example.at(it_frame % example.size()).second);
     }
     loaded_body = transfer_bods(loaded_body_raw, umey_trans_tpose);
     loaded_body.id = LOAD_BOD_ID;
@@ -354,9 +351,12 @@ int main(int argc, char** argv)
                             k4abt_body_t bod0_trans = transfer_bods(bod0, mat_trans);
                             k4abt_body_t bod1_trans = transfer_bods(bod1, mat_trans_back);
 
-                            k4abt_body_t combined_bod = combine_bodies(bod0, bod1_trans);
-                            Eigen::MatrixXf combined_bod_mat = k4a_body_to_eigen(combined_bod);
 
+                            Eigen::MatrixXf combined_bod_mat = combine_bodies(bod0, bod1_trans);
+                            k4abt_body_t combined_bod = eigen_to_k4a_body(combined_bod_mat, COMBINED_BOD_ID);
+
+                            
+                            skel_hist_mas.push_back({most_recent_times[0], combined_bod_mat});
 
                             bodies.push_back(combined_bod);
                             bodies1.push_back(transfer_bods(combined_bod, mat_trans));
@@ -411,6 +411,11 @@ int main(int argc, char** argv)
                     start_time_state = std::chrono::high_resolution_clock::now();
                     state = RECORD_CLICKED;
                 }
+                else if (key == 's') {
+                    // save recording
+                    start_time_state = std::chrono::high_resolution_clock::now();
+                    state = SAVE_RECORDING;
+                }
                 else if (key == 'l') {
                     example = load_skeleton_hist("master_record.txt");
                     state = FIND_START_POSE;
@@ -431,7 +436,7 @@ int main(int argc, char** argv)
                     {
                         now = std::chrono::high_resolution_clock::now();
                         auto countdown = 3000 - std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_state).count();
-                        std::cout << "record in " << countdown << std::endl;
+                        //std::cout << "record in " << countdown << std::endl;
                         std::ostringstream ss;
                         ss << "record in " << (float)countdown/1000.f;
                         msg = ss.str();
@@ -447,18 +452,21 @@ int main(int argc, char** argv)
                     case RECORDING:
                     {
                         now = std::chrono::high_resolution_clock::now();
-                        auto countdown = 15000 - std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_state).count();
-                        std::cout << "record for " << countdown << std::endl;
+                        auto countdown = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_state).count();
+                        //std::cout << "record for " << countdown << std::endl;
                         std::ostringstream ss;
                         ss << "record for " << (float)countdown/1000.f;
                         msg = ss.str();
-                        if (countdown < 0) {
-                            // 10 seconds have past. record now!!
-                            store_skeleton_hist(skel_hist_mas, "master_record.txt");
-                            state = DEFAULT;
-                            start_time_state = now;
-                            msg = "";
-                        }
+                        break;
+                    }
+                    case SAVE_RECORDING:
+                    {
+                        // 10 seconds have past. record now!!
+                        std::cout << "store recording" << std::endl;
+                        store_skeleton_hist(skel_hist_mas, "master_record.txt");
+                        state = DEFAULT;
+                        start_time_state = now;
+                        msg = "";
                         break;
                     }
                     default:

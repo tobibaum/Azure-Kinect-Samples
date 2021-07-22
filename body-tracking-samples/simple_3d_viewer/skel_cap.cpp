@@ -170,7 +170,7 @@ Eigen::MatrixXf k4a_body_to_eigen(k4abt_body_t _main_body) {
 	return _body_mat;
 }
 
-k4abt_body_t eigen_to_k4a_body(Eigen::MatrixXf _in_mat) {
+k4abt_body_t eigen_to_k4a_body(Eigen::MatrixXf _in_mat, int id) {
 	int i = 0;
 	k4abt_body_t bod = k4abt_body_t();
 	for (k4abt_joint_t& joint : bod.skeleton.joints) {
@@ -179,11 +179,14 @@ k4abt_body_t eigen_to_k4a_body(Eigen::MatrixXf _in_mat) {
 		joint.position.xyz.z = _in_mat(i, 2);
 		i++;
 	}
+    if(id != -1){
+        bod.id = id;
+    }
 	return bod;
 }
 
-std::vector<Eigen::MatrixXf> load_skeleton_hist(std::string _filename) {
-	std::vector<Eigen::MatrixXf> output;
+std::vector<std::pair<long, Eigen::MatrixXf>> load_skeleton_hist(std::string _filename) {
+	std::vector<std::pair<long, Eigen::MatrixXf>> output;
 
 	std::ifstream infile(_filename);
 	std::string line;
@@ -197,26 +200,30 @@ std::vector<Eigen::MatrixXf> load_skeleton_hist(std::string _filename) {
 
 			// Iterate over the istream, using >> to grab floats
 			// and push_back to store them in the vector
-			std::copy(std::istream_iterator<float>(iss),
+            std::istream_iterator<float> stream(iss);
+            long ts = *stream;
+            stream++;
+			std::copy(stream,
 				std::istream_iterator<float>(),
 				std::back_inserter(v));
 
 			Eigen::Map<Eigen::MatrixXf> line_mat(v.data(), K4ABT_JOINT_COUNT, 3);
-			output.push_back(line_mat);
+			output.push_back({ts, line_mat});
 		}
 	}
 	return output;
 }
 
-void store_skeleton_hist(std::vector<Eigen::MatrixXf> _skel_hist, std::string _filename) {
+void store_skeleton_hist(std::vector<std::pair<long, Eigen::MatrixXf>> _skel_hist, std::string _filename) {
 	// store the skel histories.
 	std::ofstream outfile(_filename);
 	if (outfile.is_open())
 	{
 		// space separated line-wise elements
-		for (const Eigen::MatrixXf& skel : _skel_hist) {
-			for (int i = 0; i < skel.size(); i++) {
-				outfile << skel.data()[i] << " ";
+		for (auto skel : _skel_hist) {
+            outfile << skel.first << "\t";
+			for (int i = 0; i < skel.second.size(); i++) {
+				outfile << skel.second.data()[i] << " ";
 			}
 			outfile << std::endl;
 		}
