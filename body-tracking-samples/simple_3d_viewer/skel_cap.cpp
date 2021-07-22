@@ -147,108 +147,120 @@ void SkeletonCapture::run(void){
 }
 
 k4abt_body_t transfer_bods(k4abt_body_t _bod_in, Eigen::Matrix4f _mat_trans) {
-	Eigen::MatrixXf kin1bod_mat = k4a_body_to_eigen(_bod_in);
-	Eigen::MatrixXf full_mat1((int)K4ABT_JOINT_COUNT, 4);
-	Eigen::MatrixXf oneMat = Eigen::MatrixXf::Ones((int)K4ABT_JOINT_COUNT, 1);
+    Eigen::MatrixXf kin1bod_mat = k4a_body_to_eigen(_bod_in);
+    Eigen::MatrixXf full_mat1((int)K4ABT_JOINT_COUNT, 4);
+    Eigen::MatrixXf oneMat = Eigen::MatrixXf::Ones((int)K4ABT_JOINT_COUNT, 1);
 
 
-	full_mat1 << kin1bod_mat, oneMat;
-	Eigen::MatrixXf res_mat1 = (_mat_trans * full_mat1.transpose()).transpose().block(0, 0, (int)K4ABT_JOINT_COUNT, 3);
-	k4abt_body_t res_bod = eigen_to_k4a_body(res_mat1);
-	res_bod.id = _bod_in.id;
+    full_mat1 << kin1bod_mat, oneMat;
+    Eigen::MatrixXf res_mat1 = (_mat_trans * full_mat1.transpose()).transpose().block(0, 0, (int)K4ABT_JOINT_COUNT, 3);
+    k4abt_body_t res_bod = eigen_to_k4a_body(res_mat1);
+    res_bod.id = _bod_in.id;
 
-	return res_bod;
+    return res_bod;
 }
 
 Eigen::MatrixXf k4a_body_to_eigen(k4abt_body_t _main_body) {
-	int i = 0;
-	Eigen::MatrixXf _body_mat((int)K4ABT_JOINT_COUNT, 3);
-	for (const k4abt_joint_t& joint : _main_body.skeleton.joints) {
-		_body_mat.row(i) << joint.position.v[0], joint.position.v[1], joint.position.v[2];
-		i++;
-	}
-	return _body_mat;
+    int i = 0;
+    Eigen::MatrixXf _body_mat((int)K4ABT_JOINT_COUNT, 3);
+    for (const k4abt_joint_t& joint : _main_body.skeleton.joints) {
+        _body_mat.row(i) << joint.position.v[0], joint.position.v[1], joint.position.v[2];
+        i++;
+    }
+    return _body_mat;
 }
 
-k4abt_body_t eigen_to_k4a_body(Eigen::MatrixXf _in_mat) {
-	int i = 0;
-	k4abt_body_t bod = k4abt_body_t();
-	for (k4abt_joint_t& joint : bod.skeleton.joints) {
-		joint.position.xyz.x = _in_mat(i, 0);
-		joint.position.xyz.y = _in_mat(i, 1);
-		joint.position.xyz.z = _in_mat(i, 2);
-		i++;
-	}
-	return bod;
+k4abt_body_t eigen_to_k4a_body(Eigen::MatrixXf _in_mat, int id) {
+    int i = 0;
+    k4abt_body_t bod = k4abt_body_t();
+    for (k4abt_joint_t& joint : bod.skeleton.joints) {
+        joint.position.xyz.x = _in_mat(i, 0);
+        joint.position.xyz.y = _in_mat(i, 1);
+        joint.position.xyz.z = _in_mat(i, 2);
+        i++;
+    }
+    if(id != -1){
+        bod.id = id;
+    }
+    return bod;
 }
 
-std::vector<Eigen::MatrixXf> load_skeleton_hist(std::string _filename) {
-	std::vector<Eigen::MatrixXf> output;
+std::vector<std::pair<long, Eigen::MatrixXf>> load_skeleton_hist(std::string _filename) {
+    std::vector<std::pair<long, Eigen::MatrixXf>> output;
 
-	std::ifstream infile(_filename);
-	std::string line;
-	if (infile.is_open())
-	{
-		while (std::getline(infile, line)) {
-			std::vector<float> v;
+    std::ifstream infile(_filename);
+    std::string line;
+    if (infile.is_open())
+    {
+        while (std::getline(infile, line)) {
+            std::vector<float> v;
 
-			// Build an istream that holds the input string
-			std::istringstream iss(line);
+            // Build an istream that holds the input string
+            std::istringstream iss(line);
 
-			// Iterate over the istream, using >> to grab floats
-			// and push_back to store them in the vector
-			std::copy(std::istream_iterator<float>(iss),
-				std::istream_iterator<float>(),
-				std::back_inserter(v));
+            // Iterate over the istream, using >> to grab floats
+            // and push_back to store them in the vector
+            std::istream_iterator<float> stream(iss);
+            long ts = *stream;
+            stream++;
+            std::copy(stream,
+                std::istream_iterator<float>(),
+                std::back_inserter(v));
 
-			Eigen::Map<Eigen::MatrixXf> line_mat(v.data(), K4ABT_JOINT_COUNT, 3);
-			output.push_back(line_mat);
-		}
-	}
-	return output;
+            Eigen::Map<Eigen::MatrixXf> line_mat(v.data(), K4ABT_JOINT_COUNT, 3);
+            output.push_back({ts, line_mat});
+        }
+    }
+    return output;
 }
 
-void store_skeleton_hist(std::vector<Eigen::MatrixXf> _skel_hist, std::string _filename) {
-	// store the skel histories.
-	std::ofstream outfile(_filename);
-	if (outfile.is_open())
-	{
-		// space separated line-wise elements
-		for (const Eigen::MatrixXf& skel : _skel_hist) {
-			for (int i = 0; i < skel.size(); i++) {
-				outfile << skel.data()[i] << " ";
-			}
-			outfile << std::endl;
-		}
-	}
-	outfile.close();
+void store_skeleton_hist(std::vector<std::pair<long, Eigen::MatrixXf>> _skel_hist, std::string _filename) {
+    // store the skel histories.
+    std::ofstream outfile(_filename);
+    if (outfile.is_open())
+    {
+        // space separated line-wise elements
+        for (auto skel : _skel_hist) {
+            outfile << skel.first << "\t";
+            for (int i = 0; i < skel.second.size(); i++) {
+                outfile << skel.second.data()[i] << " ";
+            }
+            outfile << std::endl;
+        }
+    }
+    outfile.close();
 }
 
-std::vector<std::pair<int, int>> draw_pairs =
+float euclideanDist(cv::Point& p, cv::Point& q) {
+    cv::Point diff = p - q;
+    return cv::sqrt(diff.x*diff.x + diff.y*diff.y);
+}
+
+std::vector<std::tuple<int, int, float>> draw_pairs =
 {
-	{ K4ABT_JOINT_PELVIS, K4ABT_JOINT_SPINE_NAVEL },
-	{ K4ABT_JOINT_SPINE_NAVEL, K4ABT_JOINT_SPINE_CHEST },
-	{ K4ABT_JOINT_SPINE_CHEST, K4ABT_JOINT_NECK },
-	{ K4ABT_JOINT_NECK, K4ABT_JOINT_CLAVICLE_LEFT},
-	{ K4ABT_JOINT_CLAVICLE_LEFT, K4ABT_JOINT_SHOULDER_LEFT},
-	{ K4ABT_JOINT_SHOULDER_LEFT, K4ABT_JOINT_ELBOW_LEFT},
-	{ K4ABT_JOINT_ELBOW_LEFT, K4ABT_JOINT_WRIST_LEFT},
-	{ K4ABT_JOINT_WRIST_LEFT, K4ABT_JOINT_HAND_LEFT},
-	{ K4ABT_JOINT_NECK, K4ABT_JOINT_CLAVICLE_RIGHT},
-	{ K4ABT_JOINT_CLAVICLE_RIGHT, K4ABT_JOINT_SHOULDER_RIGHT},
-	{ K4ABT_JOINT_SHOULDER_RIGHT, K4ABT_JOINT_ELBOW_RIGHT},
-	{ K4ABT_JOINT_ELBOW_RIGHT, K4ABT_JOINT_WRIST_RIGHT},
-	{ K4ABT_JOINT_WRIST_RIGHT, K4ABT_JOINT_HAND_RIGHT},
-	{ K4ABT_JOINT_PELVIS, K4ABT_JOINT_HIP_LEFT },
-	{ K4ABT_JOINT_HIP_LEFT,K4ABT_JOINT_KNEE_LEFT },
-	{ K4ABT_JOINT_KNEE_LEFT,K4ABT_JOINT_ANKLE_LEFT },
-	{ K4ABT_JOINT_ANKLE_LEFT,K4ABT_JOINT_FOOT_LEFT },
-	{ K4ABT_JOINT_PELVIS, K4ABT_JOINT_HIP_RIGHT },
-	{ K4ABT_JOINT_HIP_RIGHT,K4ABT_JOINT_KNEE_RIGHT },
-	{ K4ABT_JOINT_KNEE_RIGHT,K4ABT_JOINT_ANKLE_RIGHT },
-	{ K4ABT_JOINT_ANKLE_RIGHT,K4ABT_JOINT_FOOT_RIGHT },
-	{ K4ABT_JOINT_NECK, K4ABT_JOINT_HEAD},
-	{ K4ABT_JOINT_HEAD, K4ABT_JOINT_NOSE}
+	{ K4ABT_JOINT_PELVIS, K4ABT_JOINT_SPINE_NAVEL, 3 },
+	{ K4ABT_JOINT_SPINE_NAVEL, K4ABT_JOINT_SPINE_CHEST, 3 },
+	{ K4ABT_JOINT_SPINE_CHEST, K4ABT_JOINT_NECK, 3 },
+	{ K4ABT_JOINT_NECK, K4ABT_JOINT_CLAVICLE_LEFT, 0},
+	{ K4ABT_JOINT_CLAVICLE_LEFT, K4ABT_JOINT_SHOULDER_LEFT, -1},
+	{ K4ABT_JOINT_SHOULDER_LEFT, K4ABT_JOINT_ELBOW_LEFT, 1},
+	{ K4ABT_JOINT_ELBOW_LEFT, K4ABT_JOINT_WRIST_LEFT, 1},
+	{ K4ABT_JOINT_WRIST_LEFT, K4ABT_JOINT_HAND_LEFT, 0},
+	{ K4ABT_JOINT_NECK, K4ABT_JOINT_CLAVICLE_RIGHT, 0},
+	{ K4ABT_JOINT_CLAVICLE_RIGHT, K4ABT_JOINT_SHOULDER_RIGHT, -1},
+	{ K4ABT_JOINT_SHOULDER_RIGHT, K4ABT_JOINT_ELBOW_RIGHT, 1},
+	{ K4ABT_JOINT_ELBOW_RIGHT, K4ABT_JOINT_WRIST_RIGHT, 1},
+	{ K4ABT_JOINT_WRIST_RIGHT, K4ABT_JOINT_HAND_RIGHT, 0},
+	{ K4ABT_JOINT_PELVIS, K4ABT_JOINT_HIP_LEFT , 0},
+	{ K4ABT_JOINT_HIP_LEFT,K4ABT_JOINT_KNEE_LEFT , 1.5},
+	{ K4ABT_JOINT_KNEE_LEFT,K4ABT_JOINT_ANKLE_LEFT , 1},
+	{ K4ABT_JOINT_ANKLE_LEFT,K4ABT_JOINT_FOOT_LEFT , 1},
+	{ K4ABT_JOINT_PELVIS, K4ABT_JOINT_HIP_RIGHT , 0},
+	{ K4ABT_JOINT_HIP_RIGHT,K4ABT_JOINT_KNEE_RIGHT , 1.5},
+	{ K4ABT_JOINT_KNEE_RIGHT,K4ABT_JOINT_ANKLE_RIGHT , 1},
+	{ K4ABT_JOINT_ANKLE_RIGHT,K4ABT_JOINT_FOOT_RIGHT , 1},
+	{ K4ABT_JOINT_NECK, K4ABT_JOINT_HEAD, 1},
+	{ K4ABT_JOINT_HEAD, K4ABT_JOINT_NOSE, 0}
 };
 
 std::vector<cv::Vec3b> colors = {
@@ -267,49 +279,78 @@ std::vector<cv::Vec3b> colors = {
 
 void draw_skeleton_on_img(std::vector<k4abt_body_t> bodies, cv::Mat color, k4a_calibration_t calibration)
 {
-	// Visualize Skeleton
-	for (const k4abt_body_t& body : bodies) {
-		std::map<int, cv::Point> joint_to_point;
-		cv::Vec3b col, col2;
+    // Visualize Skeleton
+    for (const k4abt_body_t& body : bodies) {
+        std::map<int, cv::Point> joint_to_point;
+        cv::Vec3b col, col2;
 
-		if (body.id == COMBINED_BOD_ID) {
-			col = cv::Vec3b(255, 0, 0);
-			col2 = cv::Vec3b(0, 255, 0);
-		}
-		else {
-			col = colors[(body.id - 1) %colors.size()];
-			col2 = cv::Vec3b(0, 255, 255);
-		}
-		int thicc = ((body.id == COMBINED_BOD_ID) || (body.id == LOAD_BOD_ID)) ? 10 : 4;
+        if (body.id == COMBINED_BOD_ID) {
+            //col = cv::Vec3b(255, 0, 0);
+            col = cv::Vec3b(125, 247, 64);
+            //col = cv::Vec3b( 55,   55,  55 );
+            col2 = cv::Vec3b(0, 255, 0);
+        }
+        else {
+            col = colors[(body.id - 1) %colors.size()];
+            col2 = cv::Vec3b(0, 255, 255);
+        }
+        int thicc = ((body.id == COMBINED_BOD_ID) || (body.id == LOAD_BOD_ID)) ? 10 : 4;
 
-		cv::Point last_point;
-		int k = 0;
-		for (const k4abt_joint_t& joint : body.skeleton.joints) {
-			k4a_float2_t position;
-			int valid = 0;
+        cv::Point last_point;
+        int k = 0;
+        for (const k4abt_joint_t& joint : body.skeleton.joints) {
+            k4a_float2_t position;
+            int valid = 0;
 
 
-			k4a_result_t result = k4a_calibration_3d_to_2d(&calibration, &joint.position, k4a_calibration_type_t::K4A_CALIBRATION_TYPE_DEPTH, k4a_calibration_type_t::K4A_CALIBRATION_TYPE_COLOR, &position, &valid);
-			if (K4A_RESULT_SUCCEEDED != result) {
-				k++;
-				continue;
-			}
+            k4a_result_t result = k4a_calibration_3d_to_2d(&calibration, &joint.position, k4a_calibration_type_t::K4A_CALIBRATION_TYPE_DEPTH, k4a_calibration_type_t::K4A_CALIBRATION_TYPE_COLOR, &position, &valid);
+            if (K4A_RESULT_SUCCEEDED != result) {
+                k++;
+                continue;
+            }
 
-			const int32_t thickness = (joint.confidence_level >= k4abt_joint_confidence_level_t::K4ABT_JOINT_CONFIDENCE_MEDIUM) ? -1 : 1;
-			const cv::Point point(static_cast<int32_t>(position.xy.x), static_cast<int32_t>(position.xy.y));
-			cv::circle(color, point, thicc, col2, thickness);
-			joint_to_point.insert({ k, point });
-			k++;
-		}
+            const int32_t thickness = (joint.confidence_level >= k4abt_joint_confidence_level_t::K4ABT_JOINT_CONFIDENCE_MEDIUM) ? -1 : 1;
+            const cv::Point point(static_cast<int32_t>(position.xy.x), static_cast<int32_t>(position.xy.y));
+            //cv::circle(color, point, thicc, col2, thickness);
+            joint_to_point.insert({ k, point });
+            k++;
+        }
 
-		for (const std::pair<int, int>& dp : draw_pairs) {
-			cv::Point p1 = joint_to_point[dp.first];
-			cv::Point p2 = joint_to_point[dp.second];
-			if ((p1.x == 0 && p1.y == 0) || (p2.x == 0 && p2.y == 0)) {
-				// this joint isnt visible
-				continue;
-			}
-			cv::line(color, p1, p2, col, thicc);
-		}
-	}
+        float arm_length = euclideanDist(joint_to_point[K4ABT_JOINT_SHOULDER_LEFT],
+                                         joint_to_point[K4ABT_JOINT_ELBOW_LEFT]);
+
+        for (const std::tuple<int, int, float>& dp : draw_pairs) {
+            cv::Point p1 = joint_to_point[std::get<0>(dp)];
+            cv::Point p2 = joint_to_point[std::get<1>(dp)];
+            float width = std::get<2>(dp);
+
+            if ((p1.x == 0 && p1.y == 0) || (p2.x == 0 && p2.y == 0)) {
+                // this joint isnt visible
+                continue;
+            }
+            if(width == 0){
+                // we dont want to display this one.
+                continue;
+            }
+
+            cv::line(color, p1, p2, {0,0,0}, 1);
+
+            // Do parallel lines
+            cv::Point vec = p2 - p1;
+            cv::Point vec_orth(vec.y, -vec.x);
+            float len = cv::sqrt(vec.x*vec.x + vec.y*vec.y);
+            
+            // normalize length
+            vec_orth = vec_orth / len * arm_length / 5 * cv::abs(width);
+
+            if (width>0){
+                cv::line(color, p1+vec_orth, p2+vec_orth, col, thicc);
+                cv::line(color, p1-vec_orth, p2-vec_orth, col, thicc);
+            }
+            else{
+                vec_orth = {cv::abs(vec_orth.x), cv::abs(vec_orth.y)};
+                cv::line(color, p1-vec_orth, p2-vec_orth, col, thicc);
+            }
+        }
+    }
 }
