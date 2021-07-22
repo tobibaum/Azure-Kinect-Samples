@@ -364,6 +364,7 @@ int main(int argc, char** argv)
                             if(example.size() > 0){
                                 k4abt_body_t loaded = fit_example(combined_bod_mat, it_frame);
                                 bodies.push_back(loaded);
+                                bodies1.push_back(transfer_bods(loaded, mat_trans));
                             }
                         }
                     }
@@ -415,6 +416,12 @@ int main(int argc, char** argv)
                     state = FIND_START_POSE;
                     std::cout << "load clicked!!" << std::endl;
                 }
+                else if (key == 'x') {
+                    example.clear();
+                    state = DEFAULT;
+                    std::cout << "reset loaded" << std::endl;
+                    msg = "";
+                }
                 else if (key == 'd') {
                     state = DEFAULT;
                 }
@@ -440,7 +447,7 @@ int main(int argc, char** argv)
                     case RECORDING:
                     {
                         now = std::chrono::high_resolution_clock::now();
-                        auto countdown = 10000 - std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_state).count();
+                        auto countdown = 15000 - std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_state).count();
                         std::cout << "record for " << countdown << std::endl;
                         std::ostringstream ss;
                         ss << "record for " << (float)countdown/1000.f;
