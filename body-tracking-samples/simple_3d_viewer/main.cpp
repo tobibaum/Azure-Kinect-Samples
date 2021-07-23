@@ -11,7 +11,6 @@
 
 #include <BodyTrackingHelpers.h>
 #include <Utilities.h>
-#include <Window3dWrapper.h>
 
 #include <numeric>
 #include <thread>
@@ -35,107 +34,9 @@ typedef enum
 SkeletonCapture sc;
 
 // Global State and Key Process Function
-int64_t ProcessKey(void* /*context*/, int key)
-{
-    // https://www.glfw.org/docs/latest/group__keys.html
-    switch (key)
-    {
-        // Quit
-    case GLFW_KEY_ESCAPE:
-        sc.s_isRunning = false;
-        break;
-    case GLFW_KEY_K:
-        break;
-    case GLFW_KEY_B:
-        break;
-    }
-    return 1;
-}
-
-int64_t CloseCallback(void* /*context*/)
-{
-    sc.s_isRunning = false;
-    return 1;
-}
 
 void callback_handler(int arg){
     sc.s_isRunning = false;
-}
-
-void VisualizeResult(k4abt::frame bodyFrame, Window3dWrapper& window3d, int depthWidth, int depthHeight) {
-
-    // Obtain original capture that generates the body tracking result
-    k4a::capture originalCapture = bodyFrame.get_capture();
-    k4a::image depthImage = originalCapture.get_depth_image();
-    k4a::image colImage = originalCapture.get_color_image();
-
-    std::vector<Color> pointCloudColors(depthWidth * depthHeight, { 1.f, 1.f, 1.f, 1.f });
-
-    // Read body index map and assign colors
-    k4a::image bodyIndexMap = bodyFrame.get_body_index_map();
-    const uint8_t* bodyIndexMapBuffer = bodyIndexMap.get_buffer();
-    for (int i = 0; i < depthWidth * depthHeight; i++)
-    {
-        uint8_t bodyIndex = bodyIndexMapBuffer[i];
-        if (bodyIndex != K4ABT_BODY_INDEX_MAP_BACKGROUND)
-        {
-            uint32_t bodyId = bodyFrame.get_body_id(bodyIndex);
-            pointCloudColors[i] = g_bodyColors[bodyId % g_bodyColors.size()];
-        }
-    }
-
-    // Visualize point cloud
-    window3d.UpdatePointClouds(depthImage.handle(), pointCloudColors);
-
-    // Visualize the skeleton data
-    window3d.CleanJointsAndBones();
-    uint32_t numBodies = bodyFrame.get_num_bodies();
-    for (uint32_t i = 0; i < numBodies; i++)
-    {
-        k4abt_body_t body;
-        bodyFrame.get_body_skeleton(i, body.skeleton);
-        body.id = bodyFrame.get_body_id(i);
-
-        // Assign the correct color based on the body id
-        Color color = g_bodyColors[body.id % g_bodyColors.size()];
-        color.a = 0.4f;
-        Color lowConfidenceColor = color;
-        lowConfidenceColor.a = 0.1f;
-
-        // Visualize joints
-        for (int joint = 0; joint < static_cast<int>(K4ABT_JOINT_COUNT); joint++)
-        {
-            if (body.skeleton.joints[joint].confidence_level >= K4ABT_JOINT_CONFIDENCE_LOW)
-            {
-                const k4a_float3_t& jointPosition = body.skeleton.joints[joint].position;
-                const k4a_quaternion_t& jointOrientation = body.skeleton.joints[joint].orientation;
-
-                window3d.AddJoint(
-                    jointPosition,
-                    jointOrientation,
-                    body.skeleton.joints[joint].confidence_level >= K4ABT_JOINT_CONFIDENCE_MEDIUM ? color : lowConfidenceColor);
-            }
-        }
-
-        // Visualize bones
-        for (size_t boneIdx = 0; boneIdx < g_boneList.size(); boneIdx++)
-        {
-            k4abt_joint_id_t joint1 = g_boneList[boneIdx].first;
-            k4abt_joint_id_t joint2 = g_boneList[boneIdx].second;
-
-            if (body.skeleton.joints[joint1].confidence_level >= K4ABT_JOINT_CONFIDENCE_LOW &&
-                body.skeleton.joints[joint2].confidence_level >= K4ABT_JOINT_CONFIDENCE_LOW)
-            {
-                bool confidentBone = body.skeleton.joints[joint1].confidence_level >= K4ABT_JOINT_CONFIDENCE_MEDIUM &&
-                    body.skeleton.joints[joint2].confidence_level >= K4ABT_JOINT_CONFIDENCE_MEDIUM;
-                const k4a_float3_t& joint1Position = body.skeleton.joints[joint1].position;
-                const k4a_float3_t& joint2Position = body.skeleton.joints[joint2].position;
-
-                window3d.AddBone(joint1Position, joint2Position, confidentBone ? color : lowConfidenceColor);
-            }
-        }
-    }
-
 }
 
 bool is_calibrated = false;
@@ -259,16 +160,6 @@ int main(int argc, char** argv)
     // runner for pumping stuff into the bodyframe queue
     std::thread body_frame_thread(&SkeletonCapture::run, &sc);
 
-    bool render3d = false;
-
-    // Initialize the 3d window controller
-    Window3dWrapper window3d;
-    if(render3d){
-        window3d.Create("3D Visualization", sc.sensorCalibrations[0]);
-        window3d.SetCloseCallback(CloseCallback);
-        window3d.SetKeyCallback(ProcessKey);
-        window3d.SetJointFrameVisualization(false);
-    }
     cv::Mat color, color1, color_flip, color1_flip;
 
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -317,11 +208,6 @@ int main(int argc, char** argv)
                     // bodies for now
                     k4abt::frame frame0 = most_recent_frames[0];
                     k4abt::frame frame1 = most_recent_frames[1];
-
-                    if(render3d){
-                        VisualizeResult(frame0, window3d, sc.depthWidth, sc.depthHeight);
-                        window3d.Render();
-                    }
 
                     //=====================
                     //========MAIN=========
@@ -484,9 +370,5 @@ int main(int argc, char** argv)
     std::cout << "end run!" << std::endl;
     body_frame_thread.join();
 
-    if(render3d){
-        window3d.Delete();
-        std::cout << "deleted window" << std::endl;
-    }
     return 0;
 }
