@@ -5,18 +5,13 @@
 #include <iostream>
 #include <map>
 #include <vector>
-#include <k4arecord/playback.h>
 #include <k4a/k4a.h>
 #include <k4abt.hpp>
-
-#include <BodyTrackingHelpers.h>
-#include <Utilities.h>
 
 #include <numeric>
 #include <thread>
 #include <queue>
 #include <signal.h>
-
 
 #include "util.h"
 #include "skel_cap.hpp"
@@ -32,8 +27,6 @@ typedef enum
 } multi_kinect_state_t;
 
 SkeletonCapture sc;
-
-// Global State and Key Process Function
 
 void callback_handler(int arg){
     sc.s_isRunning = false;
