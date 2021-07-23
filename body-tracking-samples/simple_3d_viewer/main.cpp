@@ -236,7 +236,6 @@ k4abt_body_t fit_example(Eigen::MatrixXf bod_mat, uint32_t it_frame){
     }
     else {
         // TODO! include timing here!
-        // calculate time since start.
         loaded_body_raw = eigen_to_k4a_body(example.at(it_frame % example.size()).second);
     }
     loaded_body = transfer_bods(loaded_body_raw, umey_trans_tpose);
